@@ -31,7 +31,10 @@ it includes:
   &nbsp;
   <img src="docs/screenshots/lyrics.png" width="220" alt="furmuse lyrics">
   &nbsp;
-  <img src="docs/screenshots/kissntell.mov" width="220" alt="furmuse lock screen">
+  <video width="220" controls playsinline>
+  <source src="docs/screenshots/kissntell.mov" type="video/quicktime">
+  Your browser does not support this video.
+  </video>
 </p>
 
 <p align="center"><b>now playing · synced lyrics · lock screen</b></p>
