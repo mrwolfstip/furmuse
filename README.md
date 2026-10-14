@@ -31,10 +31,7 @@ it includes:
   &nbsp;
   <img src="docs/screenshots/lyrics.png" width="220" alt="furmuse lyrics">
   &nbsp;
-  <video width="220" controls playsinline>
-  <source src="docs/screenshots/kissntell.mp4" type="video/mp4">
-  Your browser does not support this video.
-  </video>
+  <video src="https://files.catbox.moe/v9s642.mp4" width="220" controls playsinline title="furmuse lock screen"></video>
 
 </p>
 
