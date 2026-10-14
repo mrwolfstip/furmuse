@@ -30,10 +30,7 @@ it includes:
   <img src="docs/screenshots/now-playing.png" width="220" alt="furmuse now playing">
   &nbsp;
   <img src="docs/screenshots/lyrics.png" width="220" alt="furmuse lyrics">
-  <video controls width="220">
-  <source src="https://files.catbox.moe/v9s642.mp4" type="video/mp4">
-  Your browser does not support the video tag. Download / watch: <a href="https://files.catbox.moe/v9s642.mp4">kissntell.mp4</a>
-</video>
+  <img src="docs/screenshots/kissntell.gif" width="220" alt="furmuse lock screen">
 </p>
 
 <p align="center"><b>now playing · synced lyrics · lock screen</b></p>
