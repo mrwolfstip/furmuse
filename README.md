@@ -32,7 +32,7 @@ it includes:
   <img src="docs/screenshots/lyrics.png" width="220" alt="furmuse lyrics">
   &nbsp;
   <video width="220" controls playsinline>
-  <source src="docs/screenshots/kissntell.mov" type="video/quicktime">
+  <source src="docs/screenshots/kissntell.mp4" type="video/quicktime">
   Your browser does not support this video.
   </video>
 </p>
