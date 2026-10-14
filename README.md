@@ -31,7 +31,7 @@ it includes:
   &nbsp;
   <img src="docs/screenshots/lyrics.png" width="220" alt="furmuse lyrics">
   &nbsp;
-  <img src="docs/screenshots/lock-screen.png" width="220" alt="furmuse lock screen">
+  <img src="docs/screenshots/kissntell.mov" width="220" alt="furmuse lock screen">
 </p>
 
 <p align="center"><b>now playing · synced lyrics · lock screen</b></p>
