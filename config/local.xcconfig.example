@@ -1,0 +1,10 @@
+// copy to config/local.xcconfig (gitignored) and fill in your own values.
+// never commit local.xcconfig. values are never shown inside the app.
+
+// Enter the Spotify client id in the app's setup. Build-config client ids are intentionally ignored.
+wolfified_lastfm_api_key =
+wolfified_lastfm_shared_secret =
+
+// optional overrides
+// wolfified_bundle_id = wolf.knots.player
+// DEVELOPMENT_TEAM =

@@ -1,0 +1,7 @@
+// links the librespot bridge (rust/build.sh builds the libraries; the "Build librespot (rust)" Run Script phase calls it).
+// static on purpose: Xcode reads xcconfig files before any build phase runs, so this file cannot be generated mid-build.
+LIBRESPOT_LIB = libwolfified_librespot_ffi.a
+LIBRESPOT_SYSLIBS = -lresolv -framework Security -framework SystemConfiguration -framework CoreFoundation
+SWIFT_INCLUDE_PATHS = $(inherited) $(SRCROOT)/rust/wolfified-librespot-ffi
+OTHER_LDFLAGS[sdk=iphonesimulator*] = $(inherited) $(SRCROOT)/rust/out/sim/$(LIBRESPOT_LIB) $(LIBRESPOT_SYSLIBS)
+OTHER_LDFLAGS[sdk=iphoneos*] = $(inherited) $(SRCROOT)/rust/out/device/$(LIBRESPOT_LIB) $(LIBRESPOT_SYSLIBS)

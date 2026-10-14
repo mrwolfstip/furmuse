@@ -1,0 +1,4 @@
+module CWolfLibrespot {
+    header "include/wolf_librespot.h"
+    export *
+}

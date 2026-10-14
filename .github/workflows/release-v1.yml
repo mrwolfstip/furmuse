@@ -1,0 +1,53 @@
+name: Build and release v1 IPA
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: furmuse-v1-release
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install Rust targets
+        run: |
+          rustup target add aarch64-apple-ios
+
+      - name: Build unsigned IPA
+        run: ./scripts/makeipa.sh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: furmuse-v1-unsigned-ipa
+          path: build/furmuse.ipa
+          if-no-files-found: error
+
+      - name: Publish v1 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1
+          name: Furmuse v1
+          body: |
+            Automated unsigned IPA build from the latest push.
+
+            Download `furmuse.ipa` and sign it with your preferred iOS signing tool before installing it.
+          files: build/furmuse.ipa
+          make_latest: true

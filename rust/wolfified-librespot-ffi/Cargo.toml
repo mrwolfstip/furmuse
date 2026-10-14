@@ -1,0 +1,30 @@
+[package]
+name = "wolfified-librespot-ffi"
+version = "0.3.0"
+edition = "2021"
+description = "C ffi around librespot 0.8.0 that hands decoded pcm to wolfified. memory only: no audio is written to disk."
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+# path = the supplied librespot-0.8.0 source tree, placed next to this crate (see ../README.md)
+librespot-core = { path = "../../librespot-0.8.0/core", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { path = "../../librespot-0.8.0/playback", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-connect = { path = "../../librespot-0.8.0/connect", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-metadata = { path = "../../librespot-0.8.0/metadata", default-features = false, features = ["rustls-tls-webpki-roots"] }
+# zeroconf advertisement (mDNS via libmdns). optional so a platform problem there can be switched off: WOLF_NO_ZEROCONF=1 ./rust/build.sh sim
+librespot-discovery = { path = "../../librespot-0.8.0/discovery", default-features = false, features = ["with-libmdns", "rustls-tls-webpki-roots"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+log = "0.4"
+
+[features]
+default = ["zeroconf"]
+zeroconf = ["dep:librespot-discovery", "dep:futures-util"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,10 @@
+// written by rust/build.sh; links the librespot bridge when it has been built
+#include? "rust.xcconfig"
+#include "base.xcconfig"
+
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(wolfified_private_flag) $(wolfified_animated_flag)
+SWIFT_OPTIMIZATION_LEVEL = -O
+SWIFT_COMPILATION_MODE = wholemodule
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+VALIDATE_PRODUCT = YES
+ENABLE_NS_ASSERTIONS = NO
