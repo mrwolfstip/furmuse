@@ -4,20 +4,20 @@
 
 <h1 align="center">furmuse</h1>
 
-<p align="center">your music, your covers, your way.</p>
+<p align="center">your music, your covers, your way. or should i say wolf's way?</p>
 
 <p align="center">a simple iphone music player with spotify, youtube audio, local files, synced lyrics, animated artwork and lyric cards.</p>
 
 ---
 
-furmuse gives your music an apple music-inspired player while letting you choose where songs, artwork and lyrics come from.
+furmuse gives your music an basic swift-ui music player while letting you choose where songs, artwork and lyrics come from.
 
 it includes:
 
 * spotify search and playlist importing
-* fast youtube audio playback
+* fast youtube audio playback (fast... decent enough.)
 * local music files and downloads
-* synced, word-by-word lyrics
+* synced, word-by-word lyrics from multiple sources, even chinese!
 * spotify canvas and apple music animated artwork
 * custom still and animated album covers
 * lock screen artwork and lyric display
@@ -52,9 +52,9 @@ it includes:
 1. open the [latest release](https://github.com/mrwolfstip/furmuse/releases/latest)
 2. download `furmuse.ipa`
 3. the ipa is unsigned, so install and sign it with an ios sideloading app such as sideloadly or altstore
-4. open furmuse on your iphone and follow the setup screens — setup can also be skipped
+4. open furmuse on your iphone and follow the setup screens — setup can also be skipped for some parts.
 
-free apple ids normally need the app to be signed again every seven days. paid apple developer accounts have longer signing periods. that limit comes from apple, not furmuse.
+free apple ids normally need the app to be signed again every seven days. paid apple developer accounts have longer signing periods. that limit comes from apple, not furmuse, so don't go ahead and complain.
 
 ## build it yourself on a mac
 
@@ -134,4 +134,8 @@ last.fm is optional. its api key and shared secret can be added under **settings
 
 spotify and last.fm keys entered in the app are stored in the ios keychain. personal keys, tokens, signing files and build products are ignored by git.
 
-furmuse is an independent project. it is not affiliated with spotify, apple, youtube or last.fm. use connected services according to their terms.
+furmuse is an independent project. it is not affiliated with spotify, apple, youtube or last.fm. use connected services according to their terms. don't go ahead complaining when you get banned, as using this can be a risk!
+
+## footnote
+
+a discord server to report bugs, and a specific bug button and update alert is coming to this app soon.
