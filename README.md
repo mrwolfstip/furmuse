@@ -128,12 +128,6 @@ spotify playlist importing works with free accounts. spotify playback may requir
 
 last.fm is optional. its api key and shared secret can be added under **settings → last.fm**.
 
-## automatic ipa release
-
-every push to `main` or `master` runs the github actions workflow. it builds an unsigned ipa and puts it in the `v1` release.
-
-if the release cannot be created, open **settings → actions → general** in the github repository and set **workflow permissions** to **read and write permissions**.
-
 ## privacy and keys
 
 spotify and last.fm keys entered in the app are stored in the ios keychain. personal keys, tokens, signing files and build products are ignored by git.
