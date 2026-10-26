@@ -198,14 +198,14 @@
 		A1B2C3D4E5F6000000000014 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				DEVELOPMENT_TEAM = CPR3STRG2D;
+				DEVELOPMENT_TEAM = BP8NV2QB6L;
 			};
 			name = Debug;
 		};
 		A1B2C3D4E5F6000000000015 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				DEVELOPMENT_TEAM = CPR3STRG2D;
+				DEVELOPMENT_TEAM = BP8NV2QB6L;
 			};
 			name = Release;
 		};

@@ -80,7 +80,10 @@ struct PlayerView: View {
     @State private var webPlaybackTaps: [Date] = []
     @State private var showWebPlaybackHelp = false
 
-    private var coverkey: String { "\(engine.current?.id ?? "")|\(settings.applecovers)|\(settings.applecoversurl)|\(settings.spotifycanvas)|\(settings.spotifycanvasurl)|\(settings.animatedcoverorder)" }
+    private var coverkey: String {
+        let perSong = engine.current.flatMap { library.animatedcoverorder($0.id) } ?? "default"
+        return "\(engine.current?.id ?? "")|\(settings.applecovers)|\(settings.applecoversurl)|\(settings.spotifycanvas)|\(settings.spotifycanvasurl)|\(settings.animatedcoverorder)|\(perSong)"
+    }
     private var shownid: String { engine.current.map { (library.shown($0).artwork ?? $0.id) + "-\(settings.showanimatedplayer)-\(covervideo?.absoluteString ?? "")" } ?? "" }
     private var dark: Bool { scheme == .dark }
     // text: plain white on the dark scrim / black on the light one, so it never depends on the artwork or the accent
@@ -107,11 +110,19 @@ struct PlayerView: View {
             } else { artcolor = img.map { ArtworkColor.average(of: $0, key: u.absoluteString) } }
         }
         .task(id: coverkey) {
+            let requestedKey = coverkey
             covervideo = nil
             guard let t = engine.current, library.videourl(t.id) == nil,
                   library.data.overrides[t.id]?.artwork == nil else { return }
-            let found = await AnimatedCovers.video(for: t, shown: library.shown(t), settings: settings)
-            if engine.current?.id == t.id { covervideo = found }
+            let found = await AnimatedCovers.resolve(for: t, shown: library.shown(t), settings: settings, library: library)
+            guard !Task.isCancelled, engine.current?.id == t.id, coverkey == requestedKey else {
+                Log.i(.artwork, "ignored stale animated-cover result for \(t.id)")
+                return
+            }
+            covervideo = found?.video
+            if found?.fellback == true, library.animatedcoverorder(t.id) != nil, let provider = found?.provider {
+                ToastCenter.shared.show("your preferred animated cover wasn't available, using \(provider) instead")
+            }
         }
         .sheet(item: $sheet) { item in
             NavigationView {
@@ -185,6 +196,20 @@ struct PlayerView: View {
                                 if library.videourl(t.id) != nil || covervideo != nil {
                                     Button { settings.showanimatedplayer.toggle() } label: {
                                         Label(settings.showanimatedplayer ? "use still cover" : "use animated cover", systemImage: settings.showanimatedplayer ? "photo" : "play.rectangle")
+                                    }
+                                }
+                                Menu("animated cover priority") {
+                                    Button { library.setanimatedcoverorder(t.id, "canvas") } label: {
+                                        if library.animatedcoverorder(t.id) == "canvas" { Label("spotify canvas first", systemImage: "checkmark") }
+                                        else { Text("spotify canvas first") }
+                                    }
+                                    Button { library.setanimatedcoverorder(t.id, "apple") } label: {
+                                        if library.animatedcoverorder(t.id) == "apple" { Label("apple music cover first", systemImage: "checkmark") }
+                                        else { Text("apple music cover first") }
+                                    }
+                                    Button { library.setanimatedcoverorder(t.id, nil) } label: {
+                                        if library.animatedcoverorder(t.id) == nil { Label("use app default", systemImage: "checkmark") }
+                                        else { Text("use app default") }
                                     }
                                 }
                                 Button { sheet = .speed } label: { Label(String(format: "playback speed (%.2fx)", settings.speed), systemImage: "speedometer") }

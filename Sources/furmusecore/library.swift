@@ -25,11 +25,13 @@ struct LibraryData: Codable {
     var artists: [String: ArtistInfo] = [:]
     var albumart: [String: String] = [:]       // album-group key -> local artwork file
     var albumvideo: [String: String] = [:]     // album-group key -> local animated artwork
+    var animatedcoverpriority: [String: String] = [:] // per-song override: canvas or apple
+    var romanization: [String: String] = [:]   // per-song override: off, replace, below or current
 
     init() {}
 
     private enum Keys: String, CodingKey {
-        case version, tracks, playlists, mappings, overrides, artistmap, albummap, downloads, aliases, sources, library, artists, albumart, albumvideo
+        case version, tracks, playlists, mappings, overrides, artistmap, albummap, downloads, aliases, sources, library, artists, albumart, albumvideo, animatedcoverpriority, romanization
     }
 
     init(from decoder: Decoder) throws {
@@ -47,6 +49,8 @@ struct LibraryData: Codable {
         artists = try c.decodeIfPresent([String: ArtistInfo].self, forKey: .artists) ?? [:]     // artist photos; older files simply lack it
         albumart = try c.decodeIfPresent([String: String].self, forKey: .albumart) ?? [:]
         albumvideo = try c.decodeIfPresent([String: String].self, forKey: .albumvideo) ?? [:]
+        animatedcoverpriority = try c.decodeIfPresent([String: String].self, forKey: .animatedcoverpriority) ?? [:]
+        romanization = try c.decodeIfPresent([String: String].self, forKey: .romanization) ?? [:]
         if let l = try c.decodeIfPresent([String: LibraryEntry].self, forKey: .library) {
             library = l
         } else {
@@ -124,9 +128,21 @@ final class LibraryStore: ObservableObject {
     // data.tracks is "metadata furmuse knows" (queue items, search results); data.library is what is actually in the user's library.
     func inlibrary(_ id: String) -> Bool { data.library[id] != nil }
 
+    // a youtube-only track always plays from its own video. storing that as a confirmed mapping means playback never has to guess
+    // (search results, playlist adds and the link import all end up here)
+    static func ytmapping(_ t: Track) -> Mapping? {
+        guard t.id.hasPrefix(Track.ytprefix) else { return nil }
+        let vid = String(t.id.dropFirst(Track.ytprefix.count))
+        guard !vid.isEmpty else { return nil }
+        return Mapping(videoid: vid, source: "youtube", verified: true, label: nil, auto: false, videotitle: t.title, channel: t.artist,
+                       videoduration: t.duration > 0 ? t.duration : nil, trackduration: t.duration, score: nil, matchedat: Date(),
+                       confirmed: true, confirmedat: Date(), invalid: nil)
+    }
+
     func addtolibrary(_ t: Track, via: String, played: Bool = false) {
         mutate { d in
             if d.tracks[t.id] == nil { d.tracks[t.id] = t }
+            if d.mappings[t.id]?.videoid == nil, let m = LibraryStore.ytmapping(t) { d.mappings[t.id] = m }
             var e = d.library[t.id] ?? LibraryEntry(added: Date(), via: via)
             if played { e.plays += 1; e.lastplayed = Date() }
             d.library[t.id] = e
@@ -285,15 +301,17 @@ final class LibraryStore: ObservableObject {
 
     // a song that only exists as a file on this phone (unreleased, a demo...). nothing is created if the audio can't be read.
     @discardableResult
-    func addlocaltrack(title: String, artist: String, album: String, cover: UIImage, audio: URL) -> Track? {
+    func addlocaltrack(title: String, artist: String, album: String, cover: UIImage?, audio: URL) -> Track? {
         let id = Track.localprefix + UUID().uuidString
         guard attachlocal(id, from: audio) else { return nil }
         var length = 0.0
         if let u = localurl(id), let f = try? AVAudioFile(forReading: u), f.processingFormat.sampleRate > 0 { length = Double(f.length) / f.processingFormat.sampleRate }
         let t = Track(id: id, title: title, artist: artist, album: album, artwork: nil, duration: length, albumartist: artist)
         addtolibrary(t, via: "added")
-        if let key = albumkey(t) { setalbumartwork(key, image: cover) }
-        else { setartwork(id, image: cover) }
+        if let cover = cover {
+            if let key = albumkey(t) { setalbumartwork(key, image: cover) }
+            else { setartwork(id, image: cover) }
+        }
         return t
     }
 
@@ -340,6 +358,60 @@ final class LibraryStore: ObservableObject {
         return true
     }
 
+    // File-provider URLs can block while iCloud downloads or a large file is copied. Keep that
+    // work away from the main actor, but apply the source overlay and library.json mutation back
+    // on it so observers see one consistent change.
+    @MainActor
+    @discardableResult
+    func attachlocalasync(_ id: String, from url: URL) async -> Bool {
+        let copied: (name: String, original: String)? = await Task.detached(priority: .userInitiated) {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let ext = url.pathExtension.isEmpty ? "audio" : url.pathExtension.lowercased()
+            let name = UUID().uuidString + "." + ext
+            let dest = LibraryStore.localdir.appendingPathComponent(name)
+            do {
+                try Task.checkCancellation()
+                try FileManager.default.copyItem(at: url, to: dest)
+                try Task.checkCancellation()
+                _ = try AVAudioFile(forReading: dest)
+                return (name, url.lastPathComponent)
+            } catch {
+                try? FileManager.default.removeItem(at: dest)
+                if !(error is CancellationError) { Log.e(.local, "local import failed for \(id): \(error.localizedDescription)") }
+                return nil
+            }
+        }.value
+        guard let copied else { return false }
+        let old = data.sources[id]?.localaudio
+        mutate { d in
+            var s = d.sources[id] ?? SourceChoice()
+            s.localaudio = copied.name
+            s.localname = copied.original
+            d.sources[id] = s
+        }
+        if let old { try? FileManager.default.removeItem(at: LibraryStore.localdir.appendingPathComponent(old)) }
+        Log.i(.local, "attached local audio to \(id): \(copied.original)")
+        return true
+    }
+
+    @MainActor
+    func addlocaltrackasync(title: String, artist: String, album: String, cover: UIImage?, audio: URL) async -> Track? {
+        let id = Track.localprefix + UUID().uuidString
+        guard await attachlocalasync(id, from: audio) else { return nil }
+        var length = 0.0
+        if let u = localurl(id), let f = try? AVAudioFile(forReading: u), f.processingFormat.sampleRate > 0 {
+            length = Double(f.length) / f.processingFormat.sampleRate
+        }
+        let track = Track(id: id, title: title, artist: artist, album: album, artwork: nil, duration: length, albumartist: artist)
+        addtolibrary(track, via: "added")
+        if let cover {
+            if let key = albumkey(track) { setalbumartwork(key, image: cover) }
+            else { setartwork(id, image: cover) }
+        }
+        return track
+    }
+
     func detachlocal(_ id: String) {
         let old = data.sources[id]?.localaudio
         mutate { d in
@@ -376,6 +448,20 @@ final class LibraryStore: ObservableObject {
     func preferred(_ id: String) -> SourceKind? { data.sources[id]?.preferred.flatMap { SourceKind(rawValue: $0) } }
 
     func setmapping(_ id: String, _ m: Mapping?) { mutate { $0.mappings[id] = m } }
+    func animatedcoverorder(_ id: String) -> String? { data.animatedcoverpriority[id] }
+    func setanimatedcoverorder(_ id: String, _ order: String?) {
+        mutate { data in
+            if let order { data.animatedcoverpriority[id] = order }
+            else { data.animatedcoverpriority[id] = nil }
+        }
+    }
+    func romanization(_ id: String) -> String? { data.romanization[id] }
+    func setromanization(_ id: String, _ mode: String?) {
+        mutate { data in
+            if let mode { data.romanization[id] = mode }
+            else { data.romanization[id] = nil }
+        }
+    }
     func setoverride(_ id: String, _ o: Override?) {
         mutate { d in
             if let o = o, o != Override() { d.overrides[id] = o } else { d.overrides[id] = nil }
@@ -575,6 +661,7 @@ final class LibraryStore: ObservableObject {
     func add(_ t: Track, to playlistid: String) {
         mutate { d in
             d.tracks[t.id] = d.tracks[t.id] ?? t
+            if d.mappings[t.id]?.videoid == nil, let m = LibraryStore.ytmapping(t) { d.mappings[t.id] = m }
             if d.library[t.id] == nil { d.library[t.id] = LibraryEntry(added: Date(), via: "playlist") }
             guard let i = d.playlists.firstIndex(where: { $0.id == playlistid }) else { return }
             if !d.playlists[i].trackids.contains(t.id) { d.playlists[i].trackids.append(t.id) }
@@ -584,15 +671,26 @@ final class LibraryStore: ObservableObject {
     func tracks(of p: LocalPlaylist) -> [Track] { p.trackids.compactMap { data.tracks[$0] } }
 
     func exportdata() -> URL? {
+        guard let raw = backupdata() else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("furmuse-library-\(UUID().uuidString).json")
+        do {
+            try raw.write(to: url, options: .atomic)
+            Log.i(.local, "library backup prepared (\(raw.count) bytes)")
+            return url
+        } catch {
+            Log.e(.local, "library backup write failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func backupdata() -> Data? {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         enc.dateEncodingStrategy = .iso8601
         var copy = data
         copy.downloads = [:]
-        guard let raw = try? enc.encode(copy) else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("furmuse-library.json")
-        try? raw.write(to: url, options: .atomic)
-        return url
+        do { return try enc.encode(copy) }
+        catch { Log.e(.local, "library backup encode failed: \(error.localizedDescription)"); return nil }
     }
 
     @discardableResult
@@ -627,6 +725,7 @@ final class LibraryStore: ObservableObject {
             for (k, v) in inc.albumvideo where d.albumvideo[k] == nil {
                 if ArtworkStore.validFilename(v) { d.albumvideo[k] = v; added += 1 }
             }
+            for (k, v) in inc.romanization where d.romanization[k] == nil && ["off", "replace", "below", "current"].contains(v) { d.romanization[k] = v; added += 1 }
             for (k, v) in inc.sources where d.sources[k] == nil { var s = v; s.localaudio = nil; s.localname = nil; if s != SourceChoice() { d.sources[k] = s; added += 1 } }   // audio files themselves aren't exported
             for p in inc.playlists {
                 if let i = d.playlists.firstIndex(where: { $0.id == p.id }) {

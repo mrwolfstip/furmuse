@@ -38,14 +38,14 @@ struct YouTubeImportView: View {
                 Button("find tracks") { start() }.disabled(YouTubePlaylist.playlistid(from: link) == nil)
             }
             if !auth.connected {
-                Section { Text("connect spotify in settings first.").foregroundColor(.orange).font(.footnote) }
+                Section { Text("spotify isn't connected, so every video is added as a youtube-only track.").foregroundColor(.secondary).font(.footnote) }
             }
         }
     }
 
     private func start() {
-        guard auth.connected else { ToastCenter.shared.show("connect spotify in settings first", route: .spotify); return }
-        task = Task { await planner.run(link: link, api: Services.shared.api) }
+        let api: SpotifyAPI? = auth.connected ? Services.shared.api : nil
+        task = Task { await planner.run(link: link, api: api) }
     }
 
     private func progressview(title: String, detail: String, value: Double?) -> some View {
@@ -74,6 +74,12 @@ struct YouTubeImportView: View {
 
     private var reviewview: some View {
         List {
+            if let warning = planner.warning {
+                Section {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote).foregroundColor(.orange)
+                }
+            }
             Section(footer: Text("\(planner.items.count) videos found. green = good match, orange = please check, grey = no spotify match. tap a row to change it. only ticked songs are added.")) {
                 Toggle("show only tracks that need checking (\(planner.reviewcount))", isOn: $onlyreview)
             }

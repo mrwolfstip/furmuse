@@ -8,7 +8,7 @@ final class Settings: ObservableObject {
     private func get<T>(_ key: String, _ def: T) -> T { d.object(forKey: k(key)) as? T ?? def }
     private func put(_ v: Any, _ key: String) { d.set(v, forKey: k(key)) }
 
-    @Published var thememode = "system" { didSet { put(thememode, "thememode") } }
+    @Published var thememode = "dark" { didSet { put(thememode, "thememode") } }
     @Published var accentr = 0.08 { didSet { put(accentr, "accentr") } }
     @Published var accentg = 0.62 { didSet { put(accentg, "accentg") } }
     @Published var accentb = 0.88 { didSet { put(accentb, "accentb") } }
@@ -36,7 +36,15 @@ final class Settings: ObservableObject {
     @Published var lyricswords = true { didSet { put(lyricswords, "lyricswords") } }
     @Published var lyricsfake = true { didSet { put(lyricsfake, "lyricsfake") } }       // estimate word timing for line-synced lyrics
     @Published var lyricsmore = true { didSet { put(lyricsmore, "lyricsmore") } }       // also try netease, qq music and kugou
+    @Published var spicycommunity = true { didSet { put(spicycommunity, "spicycommunity") } }
+    @Published var spicyapple = true { didSet { put(spicyapple, "spicyapple") } }
+    @Published var spicyspotify = true { didSet { put(spicyspotify, "spicyspotify") } }
+    @Published var lyricsproviderorder: [String] = ["spicy", "lrclib", "netease", "qq", "kugou"] { didSet { put(lyricsproviderorder, "lyricsproviderorder") } }
+    @Published var lyricsdisabledproviders: [String] = [] { didSet { put(lyricsdisabledproviders, "lyricsdisabledproviders") } }
     @Published var lyricssize = 22.0 { didSet { put(lyricssize, "lyricssize") } }
+    @Published var lyricsstyle = "classic" { didSet { put(lyricsstyle, "lyricsstyle") } } // classic or laser
+    @Published var lyricsromanize = false { didSet { put(lyricsromanize, "lyricsromanize") } }
+    @Published var lyricsromanstyle = "replace" { didSet { put(lyricsromanstyle, "lyricsromanstyle") } }   // replace, below or current
     @Published var toastson = true { didSet { put(toastson, "toastson") } }
     @Published var applecovers = true { didSet { put(applecovers, "applecovers") } }
     @Published var applecoversurl = "https://artwork.m8tec.top" { didSet { put(applecoversurl, "applecoversurl") } }
@@ -68,7 +76,8 @@ final class Settings: ObservableObject {
         // Remove preferences and the local file from the short-lived wallpaper experiment.
         if let old = d.string(forKey: k("wallpaperfile")), !old.isEmpty { ArtworkStore.remove(old) }
         for oldkey in ["wallpaperfile", "wallpaperblur", "wallpaperdark"] { d.removeObject(forKey: k(oldkey)) }
-        thememode = get("thememode", "system")
+        // Existing users keep their saved choice; only an install with no theme preference starts dark.
+        thememode = get("thememode", "dark")
         accentr = get("accentr", 0.08); accentg = get("accentg", 0.62); accentb = get("accentb", 0.88)
         speed = get("speed", 1.0); pitchlock = get("pitchlock", false); pitchsemis = get("pitchsemis", 0)
         volume = get("volume", 1.0); eqon = get("eqon", false)
@@ -80,6 +89,13 @@ final class Settings: ObservableObject {
         offlineonly = get("offlineonly", false); preferdownloads = get("preferdownloads", true)
         wifionly = get("wifionly", true); lyricson = get("lyricson", true); lyricsnet = get("lyricsnet", true)
         lyricswords = get("lyricswords", true); lyricsfake = get("lyricsfake", true); lyricsmore = get("lyricsmore", true); lyricssize = get("lyricssize", 22.0)
+        spicycommunity = get("spicycommunity", true); spicyapple = get("spicyapple", true); spicyspotify = get("spicyspotify", true)
+        let defaultProviders = ["spicy", "lrclib", "netease", "qq", "kugou"]
+        let savedOrder: [String] = get("lyricsproviderorder", [])
+        lyricsproviderorder = savedOrder.isEmpty ? defaultProviders : savedOrder + defaultProviders.filter { !savedOrder.contains($0) }
+        lyricsdisabledproviders = get("lyricsdisabledproviders", lyricsmore ? [] : ["netease", "qq", "kugou"])
+        lyricsstyle = get("lyricsstyle", "classic"); lyricsromanize = get("lyricsromanize", false)
+        lyricsromanstyle = get("lyricsromanstyle", "replace")
         toastson = get("toastson", true)
         animatestatic = get("animatestatic", true)
         lockscreenlyrics = get("lockscreenlyrics", false)
@@ -98,10 +114,10 @@ final class Settings: ObservableObject {
 
     func resetall() {
         for key in d.dictionaryRepresentation().keys where key.hasPrefix("wolfified.pref.") { d.removeObject(forKey: key) }
-        thememode = "system"; accentr = 0.08; accentg = 0.62; accentb = 0.88; speed = 1; pitchlock = false; pitchsemis = 0
+        thememode = "dark"; accentr = 0.08; accentg = 0.62; accentb = 0.88; speed = 1; pitchlock = false; pitchsemis = 0
         volume = 1; eqon = false; eq = [0, 0, 0, 0, 0]; bass = 0; reverbon = false; reverbpreset = 3; reverbmix = 25
         repeatmode = "off"; defaultsource = "youtube"; sourceorder = "youtube"; endpointurl = ""; offlineonly = false; preferdownloads = true
-        wifionly = true; lyricson = true; lyricsnet = true; lyricswords = true; lyricsfake = true; lyricsmore = true; lyricssize = 22
+        wifionly = true; lyricson = true; lyricsnet = true; lyricswords = true; lyricsfake = true; lyricsmore = true; spicycommunity = true; spicyapple = true; spicyspotify = true; lyricsproviderorder = ["spicy", "lrclib", "netease", "qq", "kugou"]; lyricsdisabledproviders = []; lyricssize = 22; lyricsstyle = "classic"; lyricsromanize = false; lyricsromanstyle = "replace"
         toastson = true; animatestatic = true; lockscreenlyrics = false; legacyiconunlocked = false; showanimatedplayer = true; askforsource = true; applecovers = true; applecoversurl = "https://artwork.m8tec.top"
         spotifycanvas = true; spotifycanvasurl = Settings.defaultcanvasurl; animatedcoverorder = "canvas"
         spotifybackendraw = SpotifyBackend.webplayback.rawValue

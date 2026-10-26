@@ -222,6 +222,23 @@ final class LibrespotSession: ObservableObject, @unchecked Sendable {
         }
     }
 
+    // User-requested recovery ignores the supervisor backoff and tears down the possibly wedged
+    // Rust session before establishing a fresh, newly-tokened one.
+    @MainActor
+    func reconnect(auth: SpotifyAuth) async throws {
+        lastauth = auth
+        nextattempt = .distantPast
+        failures = 0
+        restarting = false
+        let b = bridge
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async { b.shutdown(); continuation.resume() }
+        }
+        setstatus("reconnecting…", nil)
+        try await ensure(auth: auth)
+        Log.i(.connect, "manual librespot reconnect succeeded")
+    }
+
     func shutdown() { bridge.shutdown(); setstatus("not started", nil); Log.i(.librespot, "librespot shut down") }
 }
 
@@ -358,15 +375,24 @@ final class SpotifyPlaybackSource: PlaybackSource {
     // the decoder already passed)
     private func audible(_ ms: Int) -> Double { max(0, Double(ms) / 1000 - Double(session.bridge.buffered) / rate) }
 
-    func retarget(_ t: Track) {
+    func retarget(_ t: Track, immediate: Bool = false) {
         guard driven || connectmanaged, t.id != track.id || boundary != nil || pendingtrack != nil else { return }
-        if boundary != nil { pendingtrack = t; return }   // natural change: the old track's tail is still playing
+        if boundary != nil, !immediate { pendingtrack = t; return }   // natural change: the old track's tail is still playing
         let old = track
+        if immediate {
+            // A user picked another track in a Spotify client. Its TrackChanged event is
+            // authoritative and must not sit behind an EndOfTrack boundary left by the old item.
+            boundary = nil
+            pendingtrack = nil
+            endpending = false
+            stoppending = false
+        }
         track = t
         ended = false; endpending = false; stoppending = false
         ctx.silent = true
         resetbase(0)
         prebuffering = true; prebufferstart = Date()
+        Log.i(.connect, "retargeting immediately from \(old.id) to \(t.id)\(immediate ? " (external selection)" : "")")
         onretarget?(old, t, false)
     }
 

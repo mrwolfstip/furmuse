@@ -200,8 +200,10 @@ final class ResolverManager: ObservableObject, @unchecked Sendable {
     }
 
     func resolve(_ track: Track, fresh: Bool = false) async throws -> ResolvedSource {
+        try Task.checkCancellation()
         if !fresh, let c = cached(track.id), (c.expires ?? .distantFuture) > Date().addingTimeInterval(60) { return c }
         return try await flights.value(key: fresh ? track.id + ":fresh" : track.id) { [self] in
+            try Task.checkCancellation()
             if !fresh, let c = cached(track.id), (c.expires ?? .distantFuture) > Date().addingTimeInterval(60) { return c }
             return try await resolveUncoalesced(track)
         }
@@ -211,6 +213,7 @@ final class ResolverManager: ObservableObject, @unchecked Sendable {
         let mapping = library.data.mappings[track.id]
         var lasterr: ResolveError = .nomatch
         for r in resolvers() {
+            try Task.checkCancellation()
             do {
                 var s = try await r.resolve(track, mapping: mapping)
                 s.origin = s.origin.isEmpty ? r.id : s.origin
@@ -233,16 +236,31 @@ final class ResolverManager: ObservableObject, @unchecked Sendable {
     }
 
     func forget(_ id: String) { store(id, nil) }
+
+    // Playback requests are disposable: a rapid skip must stop the old network lookup rather than
+    // letting its coalesced task finish and race the new source. Downloads use their own request and
+    // will simply start a new flight if one was cancelled here.
+    func cancel(_ id: String) {
+        Task { await flights.cancel(id: id) }
+        Log.i(.source, "cancelled resolver work for \(id)")
+    }
 }
 
 private actor ResolverFlights {
     private var active: [String: Task<ResolvedSource, Error>] = [:]
 
     func value(key: String, operation: @escaping @Sendable () async throws -> ResolvedSource) async throws -> ResolvedSource {
+        try Task.checkCancellation()
         if let task = active[key] { return try await task.value }
         let task = Task { try await operation() }
         active[key] = task
         defer { active[key] = nil }
         return try await task.value
+    }
+
+    func cancel(id: String) {
+        for key in active.keys where key == id || key == id + ":fresh" {
+            active.removeValue(forKey: key)?.cancel()
+        }
     }
 }

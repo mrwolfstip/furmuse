@@ -28,8 +28,10 @@ struct TrackSourceSection: View {
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
             guard case .success(let urls) = result, let u = urls.first else { return }
-            if library.attachlocal(track.id, from: u) { ToastCenter.shared.show("file attached") }
-            else { ToastCenter.shared.show("couldn't read that file") }
+            Task { @MainActor in
+                if await library.attachlocalasync(track.id, from: u) { ToastCenter.shared.show("file attached") }
+                else { ToastCenter.shared.show("couldn't read that file") }
+            }
         }
     }
 }

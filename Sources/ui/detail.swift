@@ -213,7 +213,7 @@ struct LyricsView: View {
     @EnvironmentObject var library: LibraryStore
     @State private var importing = false
     @State private var pasting = false
-    @State private var pasted = ""
+    @State private var syncing = false
     @State private var active = -1
     @State private var lastuser = Date.distantPast        // last time the user dragged the lyrics; auto-scroll waits a few seconds after that
     @State private var artimage: UIImage?
@@ -234,14 +234,22 @@ struct LyricsView: View {
                 Menu {
                     Button("create lyric card") { sharinglyrics = true }
                         .disabled(lyrics.doc?.lines.isEmpty != false)
-                    Button("import lrc / ttml file") { importing = true }
-                    Button("paste lrc text") { pasted = ""; pasting = true }
+                    Button("import lyrics file") { importing = true }
+                    Button("paste lyrics") { pasting = true }
+                    Button("sync lyrics") { syncing = true }
+                    Menu("romanization") {
+                        romanitem("off", "off")
+                        romanitem("romanized words", "replace")
+                        romanitem("small text below", "below")
+                        romanitem("current line only", "current")
+                        romanitem("use app default", nil)
+                    }
                     Button("search lrclib again") { if let t = engine.current { Task { await lyrics.load(t, refetch: true) } } }
                     Button("remove my lyrics", role: .destructive) { if let t = engine.current { Task { await lyrics.removeuser(for: t) } } }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
         }
-        .task(id: engine.current?.id) {
+        .task(id: "\(engine.current?.id ?? "")|\(settings.lyricson)|\(settings.lyricsnet)") {
             guard let t = engine.current else { artimage = nil; return }
             active = -1; lastuser = .distantPast
             async let loaded: Void = lyrics.load(t)
@@ -249,30 +257,36 @@ struct LyricsView: View {
             else { artimage = nil }
             await loaded
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.plainText, .data], allowsMultipleSelection: false) { result in
             guard let t = engine.current, case .success(let urls) = result, let u = urls.first else { return }
             let scoped = u.startAccessingSecurityScopedResource()
             defer { if scoped { u.stopAccessingSecurityScopedResource() } }
-            guard let text = try? String(contentsOf: u, encoding: .utf8) else { ToastCenter.shared.show("couldn't read that file"); return }
-            let ext = ["ttml", "xml", "dfxp"].contains(u.pathExtension.lowercased()) ? "ttml" : "lrc"
-            Task { await lyrics.save(text, ext: ext, for: t) }
+            guard let text = LyricsText.read(u) else { ToastCenter.shared.show("couldn't read that file"); return }
+            // ttml by name or content; anything else (lrc, or a plain .txt of words) goes in as lrc and plain words stay unsynced
+            let ext = LyricsText.ext(for: text, filename: u.pathExtension)
+            Task { @MainActor in
+                await lyrics.save(text, ext: ext, for: t)
+                LyricsText.notify(lyricson: settings.lyricson)
+            }
         }
         .sheet(isPresented: $pasting) {
-            NavigationView {
-                VStack {
-                    TextEditor(text: $pasted).padding(8)
-                    Button("save") {
-                        if let t = engine.current { Task { await lyrics.save(pasted, ext: "lrc", for: t) } }
-                        pasting = false
-                    }.padding()
-                }
-                .themed().navigationTitle("paste lrc").navigationBarTitleDisplayMode(.inline)
-            }
+            if let track = engine.current { LyricPasteSheet(track: track) }
+        }
+        .sheet(isPresented: $syncing) {
+            if let track = engine.current { LyricSyncEditor(track: track, engine: engine) }
         }
         .sheet(isPresented: $sharinglyrics) {
             if let track = engine.current, let doc = lyrics.doc {
                 LyricCardComposer(track: library.shown(track), doc: doc, current: current(doc, engine.livepos()), artwork: artimage)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func romanitem(_ title: String, _ value: String?) -> some View {
+        let id = engine.current?.id ?? ""
+        Button { if !id.isEmpty { library.setromanization(id, value) } } label: {
+            if library.romanization(id) == value { Label(title, systemImage: "checkmark") } else { Text(title) }
         }
     }
 
@@ -285,7 +299,8 @@ struct LyricsView: View {
 
     @ViewBuilder
     private func content(_ t: Track) -> some View {
-        if let doc = lyrics.doc {
+        if let doc = lyrics.doc(for: t.id) {
+            let mode = lyrics.romanmode(for: t.id, library: library)
             GeometryReader { geometry in
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
@@ -293,14 +308,23 @@ struct LyricsView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 AlbumLink(track: t) { Text(library.shown(t).title).font(.headline).foregroundColor(.white) }
                                 ArtistLink(track: t) { Text(library.shown(t).artist).font(.subheadline).foregroundColor(.white.opacity(0.62)) }
-                                if !doc.source.isEmpty { Text(doc.source).font(.caption2).foregroundColor(.white.opacity(0.4)) }
+                                if !doc.source.isEmpty {
+                                    HStack(spacing: 4) {
+                                        Text(doc.source)
+                                        if let credit = doc.uploader, let url = URL(string: credit.url) { Text("·"); Link(credit.name, destination: url) }
+                                        if let credit = doc.maker, let url = URL(string: credit.url) { Text("· synced by"); Link(credit.name, destination: url) }
+                                    }
+                                    .font(.caption2).foregroundColor(.white.opacity(0.45))
+                                }
+                                if !doc.synced { Text("these lyrics aren't timed. use sync lyrics in the … menu to time them.").font(.caption).foregroundColor(.white.opacity(0.55)).padding(.top, 2) }
                             }
                             .padding(.bottom, 18)
                             LazyVStack(alignment: .leading, spacing: 22) {
                                 ForEach(Array(doc.lines.enumerated()), id: \.offset) { i, lyric in
                                     LyricLineView(lyric: lyric, index: i, active: active, synced: doc.synced,
                                                   size: min(max(CGFloat(settings.lyricssize) * 1.15, 16), 40),
-                                                  words: settings.lyricswords, estimate: settings.lyricsfake)
+                                                  words: settings.lyricswords, estimate: settings.lyricsfake,
+                                                  laser: settings.lyricsstyle == "laser", mode: mode)
                                         .id(i)
                                         .onTapGesture {
                                             if doc.synced, lyric.time >= 0 { lastuser = .distantPast; engine.seek(lyric.time) }
@@ -321,7 +345,18 @@ struct LyricsView: View {
                         active = now
                         if now >= 0, Date().timeIntervalSince(lastuser) > 3.5 {
                             withAnimation(.easeInOut(duration: 0.5)) { proxy.scrollTo(now, anchor: UnitPoint(x: 0.5, y: 0.34)) }
+                            // the romanized sub-line of the current line fades in and changes the height: land once more when it has settled
+                            if mode == "current" {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                                    guard active == now, Date().timeIntervalSince(lastuser) > 3.5 else { return }
+                                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(now, anchor: UnitPoint(x: 0.5, y: 0.34)) }
+                                }
+                            }
                         }
+                    }
+                    .onChange(of: mode) { _ in
+                        guard active >= 0 else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { proxy.scrollTo(active, anchor: UnitPoint(x: 0.5, y: 0.34)) }
                     }
                     .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in lastuser = Date() })
                 }
@@ -342,6 +377,7 @@ struct LyricsView: View {
 
 // one lyric line. the active line lights up word by word: real word timing when the lyrics have it, otherwise an estimate
 // spread over the line (so line-synced lrc still gets a sweep). words are joined as Text so the line wraps like normal text.
+// laser: lines blur with their distance from the active line; a romanized sub-line and an ad-lib line follow the same blur and dimming.
 private struct LyricLineView: View {
     let lyric: LyricLine
     let index: Int
@@ -350,21 +386,73 @@ private struct LyricLineView: View {
     let size: CGFloat
     let words: Bool
     let estimate: Bool
+    let laser: Bool
+    let mode: String            // off, replace, below or current
     @EnvironmentObject var engine: PlaybackEngine
 
-    private var isactive: Bool { !synced || index == active }
-    private var shown: String { lyric.text.isEmpty ? "♪" : lyric.text }
+    private var isactive: Bool {
+        guard synced else { return true }
+        let position = engine.livepos()
+        return lyric.time <= position && position < lyric.end
+    }
+    private var distance: Int { abs(index - active) }
+    private var romanline: String? { mode == "off" ? nil : lyric.roman }
+    private var replaced: Bool { mode == "replace" && romanline != nil }
+    // small romanized line under the original: every line for "below", the active line for "current" (unsynced lyrics have no active line)
+    private var showsub: Bool {
+        guard romanline != nil else { return false }
+        return mode == "below" || (mode == "current" && isactive)
+    }
+    private var shown: String {
+        let base = lyric.text.isEmpty ? "♪" : lyric.text
+        return replaced ? (lyric.roman ?? base) : base
+    }
+    private var adlib: String? {
+        guard let b = lyric.background, !b.isEmpty else { return nil }
+        return replaced ? (lyric.backgroundroman ?? b) : b
+    }
 
     private var timedwords: [LyricWord] {
         guard synced, words else { return [] }
+        if replaced {
+            if !lyric.words.isEmpty { return lyric.words.map { LyricWord(time: $0.time, end: $0.end, text: $0.roman ?? $0.text) } }
+            guard estimate else { return [] }
+            var l = lyric
+            l.text = lyric.roman ?? lyric.text
+            return LyricsParser.estimatedwords(l)
+        }
         if !lyric.words.isEmpty { return lyric.words }
         return estimate ? LyricsParser.estimatedwords(lyric) : []
     }
 
+    private var timedbackground: [LyricWord] {
+        guard synced, words, let background = lyric.backgroundwords, !background.isEmpty else { return [] }
+        return background
+    }
+
+    // opacity of the whole line; classic keeps its old values
+    private var dim: Double {
+        if !synced || isactive { return 1 }
+        if laser { return index < active ? 0.3 : 0.45 }
+        return index < active ? 0.3 : 0.5
+    }
+
+    // blur grows with the distance from the active line (1.5, 3, 4.5, capped at 6); far outside the visible area there is no blur at all
+    private var blurradius: CGFloat {
+        guard laser, synced, distance > 0, distance <= 14 else { return 0 }
+        return min(6, 1.5 * CGFloat(distance))
+    }
+
+    private var lineanimation: Animation? {
+        if laser { return UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.4) }
+        return .easeOut(duration: 0.25)
+    }
+
     var body: some View {
-        Group {
-            if synced, index == active, !timedwords.isEmpty {
-                let ws = timedwords
+        let ws = timedwords
+        let bws = timedbackground
+        VStack(alignment: lyric.opposite ? .trailing : .leading, spacing: 4) {
+            if synced, isactive, !ws.isEmpty {
                 TimelineView(.animation(minimumInterval: 1.0 / 24)) { _ in
                     sweep(ws, engine.livepos()).font(.system(size: size, weight: .bold))
                 }
@@ -372,20 +460,52 @@ private struct LyricLineView: View {
                 Text(shown)
                     .font(.system(size: size, weight: isactive ? .bold : .semibold))
                     .foregroundColor(.white)
-                    .opacity(!synced || index == active ? 1 : (index < active ? 0.3 : 0.5))
+                    .opacity(dim)
+            }
+            if showsub, let r = romanline {
+                Text(r)
+                    .font(.system(size: size * 0.6, weight: .medium))
+                    .foregroundColor(.white)
+                    .opacity(dim * 0.6)
+                    .transition(.opacity)
+            }
+            if let a = adlib {
+                if synced, isactive, !bws.isEmpty {
+                    TimelineView(.animation(minimumInterval: 1.0 / 24)) { _ in
+                        sweep(bws, engine.livepos()).font(.system(size: size * 0.65, weight: .semibold)).opacity(0.82)
+                    }
+                } else {
+                    Text(a).font(.system(size: size * 0.65, weight: .semibold)).foregroundColor(.white).opacity(dim * 0.55)
+                }
             }
         }
-        .multilineTextAlignment(.leading)
+        .multilineTextAlignment(lyric.opposite ? .trailing : .leading)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: lyric.opposite ? .trailing : .leading)
         .contentShape(Rectangle())
-        .animation(.easeOut(duration: 0.25), value: active)
+        .scaleEffect(laser && synced && !isactive ? 0.96 : 1, anchor: lyric.opposite ? .trailing : .leading)
+        .blur(radius: blurradius)
+        .shadow(color: laser && isactive ? .white.opacity(0.65) : .clear, radius: laser && isactive ? 10 : 0)
+        .animation(lineanimation, value: active)
     }
 
     private func sweep(_ ws: [LyricWord], _ pos: Double) -> Text {
-        ws.reduce(Text("")) { acc, w in
-            let p: Double = pos >= w.end ? 1 : (pos <= w.time ? 0 : (pos - w.time) / max(w.end - w.time, 0.05))
-            return acc + Text(w.text).foregroundColor(.white.opacity(0.36 + 0.64 * p))
+        let floor = laser ? 0.38 : 0.36
+        return ws.reduce(Text("")) { line, word in
+            guard laser else {
+                let p = pos >= word.end ? 1.0 : (pos <= word.time ? 0.0 : (pos - word.time) / max(word.end - word.time, 0.05))
+                return line + Text(word.text).foregroundColor(.white.opacity(floor + (1 - floor) * p))
+            }
+            // Apple Music-style laser sweep: each glyph owns a slice of the word's timing, so the light visibly travels left-to-right.
+            let glyphs = Array(word.text)
+            guard !glyphs.isEmpty else { return line }
+            let duration = max(word.end - word.time, 0.05)
+            return glyphs.enumerated().reduce(line) { text, item in
+                let start = word.time + duration * Double(item.offset) / Double(glyphs.count)
+                let end = word.time + duration * Double(item.offset + 1) / Double(glyphs.count)
+                let p = pos >= end ? 1.0 : (pos <= start ? 0.0 : (pos - start) / max(end - start, 0.01))
+                return text + Text(String(item.element)).foregroundColor(.white.opacity(floor + (1 - floor) * p))
+            }
         }
     }
 }
@@ -431,8 +551,10 @@ private struct LyricCardComposer: View {
     let doc: LyricsDoc
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var settings: Settings
+    @EnvironmentObject var lyrics: LyricsStore
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<Int>
+    @State private var romanpick = ""            // "" = not chosen yet, follow the song's effective romanization
     @State private var shareURL: URL?
     @State private var cover: UIImage?
     @State private var artistphoto: UIImage?
@@ -444,6 +566,17 @@ private struct LyricCardComposer: View {
         let start = min(max(current, 0), max(0, doc.lines.count - 1))
         _selected = State(initialValue: Set(start..<min(doc.lines.count, start + 3)))
     }
+
+    // the doc may have been romanized after the composer opened, so read the live one for this track
+    private var lyricdoc: LyricsDoc { lyrics.doc(for: track.id) ?? doc }
+
+    // off / replace / below. a still image can't animate, so the "current line only" style becomes small text below
+    private var defaultroman: String {
+        let m = lyrics.romanmode(for: track.id, library: library)
+        return m == "current" ? "below" : m
+    }
+    private var romanchoice: String { romanpick.isEmpty ? defaultroman : romanpick }
+    private func romanof(_ i: Int) -> String { lyricdoc.lines.indices.contains(i) ? (lyricdoc.lines[i].roman ?? "") : "" }
 
     private var bg: CardBackground { CardBackground(rawValue: settings.cardbg) ?? .cover }
     private var artistname: String { library.primaryartist(track) }
@@ -470,7 +603,9 @@ private struct LyricCardComposer: View {
 
     private func spec() -> LyricCardSpec {
         LyricCardSpec(title: track.title, artist: track.artist,
-                      lines: selected.sorted().compactMap { doc.lines.indices.contains($0) ? doc.lines[$0].text : nil },
+                      lines: selected.sorted().compactMap { lyricdoc.lines.indices.contains($0) ? lyricdoc.lines[$0].text : nil },
+                      romanlines: romanchoice == "off" ? nil : selected.sorted().filter { lyricdoc.lines.indices.contains($0) }.map { romanof($0) },
+                      romanstyle: romanchoice == "below" ? "below" : "replace",
                       background: bg, color: UIColor(hexstring: settings.cardcolor),
                       blur: CGFloat(settings.cardblur), shade: CGFloat(settings.cardshade),
                       lyricsize: CGFloat(settings.cardsize), brand: settings.cardbrand,
@@ -479,7 +614,7 @@ private struct LyricCardComposer: View {
 
     // changes whenever anything that affects the card changes, so the preview redraws
     private var previewkey: String {
-        "\(settings.cardbg)|\(settings.cardcolor)|\(settings.cardblur)|\(settings.cardshade)|\(settings.cardsize)|\(settings.cardbrand)|\(selected.sorted())|\(cover != nil)|\(artistphoto != nil)"
+        "\(settings.cardbg)|\(settings.cardcolor)|\(settings.cardblur)|\(settings.cardshade)|\(settings.cardsize)|\(settings.cardbrand)|\(selected.sorted())|\(cover != nil)|\(artistphoto != nil)|\(romanchoice)|\(selected.contains { !romanof($0).isEmpty })"
     }
 
     var body: some View {
@@ -507,16 +642,24 @@ private struct LyricCardComposer: View {
                         HStack { Text("darken"); Slider(value: $settings.cardshade, in: 0...0.85); Text("\(Int(settings.cardshade * 100))%").monospacedDigit().foregroundColor(.secondary).frame(minWidth: 44, alignment: .trailing) }
                     }
                 }
-                Section(header: Text("text")) {
+                Section(header: Text("text"), footer: Text("current line only is shown as small text below on a card, because a still image can't animate.")) {
+                    Picker("romanization", selection: Binding(get: { romanchoice }, set: { romanpick = $0 })) {
+                        Text("off").tag("off"); Text("romanized").tag("replace"); Text("small text below").tag("below")
+                    }
+                    .pickerStyle(.segmented)
                     HStack { Text("size"); Slider(value: $settings.cardsize, in: 40...76, step: 2) }
                     Toggle("show furmuse", isOn: $settings.cardbrand)
                 }
                 Section(footer: Text("pick up to five lines.")) {
-                    ForEach(Array(doc.lines.enumerated()), id: \.offset) { index, lyric in
+                    ForEach(Array(lyricdoc.lines.enumerated()), id: \.offset) { index, lyric in
                         Button { toggle(index) } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: selected.contains(index) ? "checkmark.circle.fill" : "circle")
-                                Text(lyric.text).foregroundColor(.primary).multilineTextAlignment(.leading)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(lyric.text).foregroundColor(.primary)
+                                    if romanchoice != "off", let r = lyric.roman, !r.isEmpty { Text(r).font(.footnote).foregroundColor(.secondary) }
+                                }
+                                .multilineTextAlignment(.leading)
                             }
                         }
                     }

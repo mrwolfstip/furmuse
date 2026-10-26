@@ -72,6 +72,42 @@ struct SettingsView: View {
     }
 }
 
+struct SpicyLyricsSettingsView: View {
+    @EnvironmentObject var settings: Settings
+    @State private var key = ""
+    @State private var reveal = false
+    @State private var testing = false
+    @State private var result: String?
+
+    var body: some View {
+        Form {
+            Section(header: Text("api key"), footer: Text("create an application at developers.spicylyrics.org/dashboard/applications. keys are shown once, so copy yours before leaving. secret keys are simplest; publishable keys need ‘no origin header’ enabled for a native app.")) {
+                Link("open spicy lyrics dashboard", destination: URL(string: "https://developers.spicylyrics.org/dashboard/applications")!)
+                if reveal { TextField("sl_sk_ or sl_pk_", text: $key).autocapitalization(.none).disableAutocorrection(true) }
+                else { SecureField("sl_sk_ or sl_pk_", text: $key).autocapitalization(.none).disableAutocorrection(true) }
+                Toggle("show key", isOn: $reveal)
+                Button("save key") {
+                    let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard value.hasPrefix("sl_sk_") || value.hasPrefix("sl_pk_") else { result = "that doesn't look like a spicy lyrics key"; return }
+                    SpicyLyrics.shared.savekey(value); key = ""; result = "saved"
+                }.disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(testing ? "testing…" : "test key") {
+                    testing = true; result = nil
+                    Task { @MainActor in result = await SpicyLyrics.shared.testkey(); testing = false }
+                }.disabled(testing || !SpicyLyrics.shared.haskey)
+                if SpicyLyrics.shared.haskey { Button("remove key", role: .destructive) { SpicyLyrics.shared.removekey(); result = "removed" } }
+                if let result { Text(result).font(.footnote).foregroundColor(.secondary) }
+            }
+            Section(header: Text("accept results from"), footer: Text("the api chooses the source. if its result is turned off here, furmuse tries the next lyrics provider.")) {
+                Toggle("community syncs", isOn: $settings.spicycommunity)
+                Toggle("apple music", isOn: $settings.spicyapple)
+                Toggle("spotify", isOn: $settings.spicyspotify)
+            }
+        }
+        .themed().navigationTitle("spicy lyrics").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 struct AppearanceSettingsView: View {
     @EnvironmentObject var settings: Settings
 
@@ -267,6 +303,14 @@ struct SpotifyPlayerSettingsView: View {
                 if let e = librespot.lasterror { Text(e).font(.footnote).foregroundColor(.orange) }
                 Button(testing ? "testing…" : "test") { runtest() }
                     .disabled(testing || LibrespotSession.shared.blocker(auth: auth) != nil)
+                Button(testing ? "reconnecting…" : "reconnect") {
+                    testing = true; testresult = nil
+                    Task { @MainActor in
+                        do { try await librespot.reconnect(auth: auth); testresult = "connected." }
+                        catch { testresult = (error as? SourceError)?.text ?? error.localizedDescription }
+                        testing = false
+                    }
+                }.disabled(testing || LibrespotSession.shared.blocker(auth: auth) != nil)
                 if let r = testresult { Text(r).font(.footnote).foregroundColor(.secondary) }
             }
             }
@@ -434,20 +478,70 @@ struct LyricsSettingsView: View {
                 Toggle("show lyrics", isOn: $settings.lyricson)
                 Toggle("find lyrics online", isOn: $settings.lyricsnet)
                 Toggle("search more sites", isOn: $settings.lyricsmore).disabled(!settings.lyricsnet)
+                NavigationLink("lyrics sources", destination: LyricsSourcesSettingsView()).disabled(!settings.lyricsnet)
+                NavigationLink("spicy lyrics key", destination: SpicyLyricsSettingsView())
             }
             Section(header: Text("highlighting")) {
+                Picker("style", selection: $settings.lyricsstyle) {
+                    Text("classic").tag("classic")
+                    Text("laser").tag("laser")
+                }
                 Toggle("highlight word by word", isOn: $settings.lyricswords)
                 Toggle("guess when timing is missing", isOn: $settings.lyricsfake).disabled(!settings.lyricswords)
             }
+            Section(header: Text("romanization"), footer: Text("you can override this for a single song from the ... menu in lyrics.")) {
+                Toggle("romanization", isOn: $settings.lyricsromanize)
+                Picker("show romanization as", selection: $settings.lyricsromanstyle) {
+                    Text("romanized words").tag("replace")
+                    Text("small text below").tag("below")
+                    Text("current line only").tag("current")
+                }.disabled(!settings.lyricsromanize)
+            }
             Section(header: Text("text size")) { Slider(value: $settings.lyricssize, in: 14...34, step: 1) }
+        }
+        .onChange(of: settings.lyricsmore) { more in
+            let extras = ["netease", "qq", "kugou"]
+            if more { settings.lyricsdisabledproviders.removeAll { extras.contains($0) } }
+            else { settings.lyricsdisabledproviders = Array(Set(settings.lyricsdisabledproviders + extras)) }
         }
         .themed().navigationTitle("lyrics").navigationBarTitleDisplayMode(.inline)
     }
 }
 
+struct LyricsSourcesSettingsView: View {
+    @EnvironmentObject var settings: Settings
+
+    var body: some View {
+        List {
+            Section(header: Text("online providers"), footer: Text("drag to choose the order. a timeout or error always falls through to the next enabled provider. your own saved lyrics always stay first.")) {
+                ForEach(settings.lyricsproviderorder, id: \.self) { id in
+                    Toggle(isOn: enabled(id)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(LyricsProviders.labels[id] ?? id)
+                            if id == "spicy", !SpicyLyrics.shared.haskey { Text("add a key").font(.caption).foregroundColor(.secondary) }
+                        }
+                    }
+                }
+                .onMove { offsets, destination in settings.lyricsproviderorder.move(fromOffsets: offsets, toOffset: destination) }
+            }
+            Section { NavigationLink("spicy lyrics key and result types", destination: SpicyLyricsSettingsView()) }
+        }
+        .environment(\.editMode, .constant(.active))
+        .themed().navigationTitle("lyrics sources").navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func enabled(_ id: String) -> Binding<Bool> {
+        Binding(get: { !settings.lyricsdisabledproviders.contains(id) }, set: { on in
+            if on { settings.lyricsdisabledproviders.removeAll { $0 == id } }
+            else if !settings.lyricsdisabledproviders.contains(id) { settings.lyricsdisabledproviders.append(id) }
+        })
+    }
+}
+
 struct LibrarySettingsView: View {
     @EnvironmentObject var library: LibraryStore
-    @State private var exporturl: URL?
+    @State private var exportdocument: LibraryBackupDocument?
+    @State private var exporting = false
     @State private var importing = false
     @State private var kind = "artist"
     @State private var from = ""
@@ -459,7 +553,11 @@ struct LibrarySettingsView: View {
                 KeyValue(key: "songs", value: "\(library.data.tracks.count)")
                 KeyValue(key: "playlists", value: "\(library.data.playlists.count)")
                 KeyValue(key: "youtube matches", value: "\(library.data.mappings.count)")
-                Button("save backup") { exporturl = library.exportdata() }
+                Button("save backup") {
+                    guard let data = library.backupdata() else { ToastCenter.shared.show("couldn't make a backup"); return }
+                    exportdocument = LibraryBackupDocument(data: data)
+                    exporting = true
+                }
                 Button("restore backup") { importing = true }
             }
             Section(header: Text("renames"), footer: Text("change how a name looks in this app.")) {
@@ -480,13 +578,28 @@ struct LibrarySettingsView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: library.data.artistmap.count + library.data.albummap.count)
         .themed().navigationTitle("library").navigationBarTitleDisplayMode(.inline)
-        .sheet(item: Binding(get: { exporturl.map { IdentifiedURL(url: $0) } }, set: { if $0 == nil { exporturl = nil } })) { ShareSheet(url: $0.url) }
+        .fileExporter(isPresented: $exporting, document: exportdocument, contentType: .json, defaultFilename: "furmuse-library") { result in
+            switch result {
+            case .success: Log.i(.local, "library backup exported"); ToastCenter.shared.show("backup saved")
+            case .failure(let error): Log.e(.local, "library backup export failed: \(error.localizedDescription)"); ToastCenter.shared.show("couldn't save the backup")
+            }
+            exportdocument = nil
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json], allowsMultipleSelection: false) { r in
             guard case .success(let urls) = r, let u = urls.first else { return }
             let n = library.importdata(u)
             ToastCenter.shared.show(n < 0 ? "couldn't read that file" : "added \(n) new items")
         }
     }
+}
+
+struct LibraryBackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var data: Data
+
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 
 struct IdentifiedURL: Identifiable, Equatable { let url: URL; var id: String { url.absoluteString } }

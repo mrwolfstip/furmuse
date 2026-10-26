@@ -19,6 +19,7 @@ final class SpotifyCanvas: ObservableObject, @unchecked Sendable {
     private let dir: URL
     private let lock = NSLock()
     private var inflight: [String: Task<AppleCover?, Never>] = [:]
+    private var serviceRetryAfter = Date.distantPast
     private let retryafter: TimeInterval = 14 * 24 * 3600
 
     private init() {
@@ -64,6 +65,7 @@ final class SpotifyCanvas: ObservableObject, @unchecked Sendable {
         let id = Self.trackid(trackid)
         guard id.count == 22 else { publish("not a valid spotify track id"); return nil }
         guard configured else { publish("add a canvas server address first"); return nil }
+        guard locked({ Date() >= serviceRetryAfter }) else { publish("canvas service is taking a break"); return nil }
         if let c = cached(trackid: id) { return c }
         if recentlynone(id) { publish("this song has no canvas"); return nil }
         let task: Task<AppleCover?, Never> = locked {
@@ -108,6 +110,9 @@ final class SpotifyCanvas: ObservableObject, @unchecked Sendable {
             return cached(trackid: trackid)
         } catch {
             if error is CancellationError { return nil }
+            // A provider-wide 5xx used to be retried on every artwork refresh and produced dozens
+            // of requests per minute. Pause the service, while leaving cached videos available.
+            locked { serviceRetryAfter = Date().addingTimeInterval(60) }
             Log.w(.artwork, "spotify canvas lookup failed: \((error as? Failure)?.text ?? error.localizedDescription)")
             try? FileManager.default.removeItem(at: dir.appendingPathComponent(trackid + ".part.mp4"))
             publish((error as? Failure)?.text ?? "canvas lookup failed")
@@ -175,7 +180,13 @@ final class SpotifyCanvas: ObservableObject, @unchecked Sendable {
 // the one place that decides which animated cover a track gets, for the player screen. priority: the user's own video (handled by
 // the caller), then the user's preferred online provider, then the other provider.
 enum AnimatedCovers {
-    static func video(for t: Track, shown s: Track, settings: Settings) async -> URL? {
+    struct Result {
+        let video: URL
+        let provider: String
+        let fellback: Bool
+    }
+
+    static func resolve(for t: Track, shown s: Track, settings: Settings, library: LibraryStore) async -> Result? {
         func apple() async -> URL? {
             guard settings.applecovers else { return nil }
             if let c = AppleCovers.shared.cached(artist: s.artist, album: s.album) { return c.video }
@@ -188,11 +199,14 @@ enum AnimatedCovers {
             if let c = await SpotifyCanvas.shared.cover(trackid: t.id) { return c.video }
             return SpotifyCanvas.shared.cached(trackid: t.id)?.video
         }
-        if settings.animatedcoverorder == "apple" {
-            if let found = await apple() { return found }
-            return await canvas()
+        let preferred = library.animatedcoverorder(t.id) ?? settings.animatedcoverorder
+        if preferred == "apple" {
+            if let found = await apple() { return Result(video: found, provider: "apple music", fellback: false) }
+            if let found = await canvas() { return Result(video: found, provider: "spotify canvas", fellback: true) }
+            return nil
         }
-        if let found = await canvas() { return found }
-        return await apple()
+        if let found = await canvas() { return Result(video: found, provider: "spotify canvas", fellback: false) }
+        if let found = await apple() { return Result(video: found, provider: "apple music", fellback: true) }
+        return nil
     }
 }

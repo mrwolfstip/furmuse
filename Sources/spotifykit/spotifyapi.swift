@@ -143,6 +143,14 @@ final class SpotifyAPI {
         return r.tracks.items.compactMap { $0?.track }
     }
 
+    // Complete metadata for a Connect/Web Playback event. Those events are deliberately small
+    // and may omit album/artist ids or artwork, while every downstream feature expects a Track.
+    func track(_ id: String) async throws -> Track {
+        guard id.count == 22 else { throw SpotifyError.badresponse }
+        guard let track = try await decode(SpTrack.self, "GET", "/tracks/\(id)").track else { throw SpotifyError.badresponse }
+        return track
+    }
+
     // the artist's photo url (spotify lists images largest first). only an exact name match counts, so a different artist's
     // photo is never shown by mistake. nil = no such artist or no image.
     func artistimage(_ name: String) async throws -> String? {

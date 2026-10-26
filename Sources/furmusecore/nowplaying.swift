@@ -15,6 +15,10 @@ final class NowPlayingCenter: @unchecked Sendable {
     private var canvasrequested = Set<String>()
     private var lyricsrequested = Set<String>()
     private var lyricTimer: Timer?
+    private let lyricplaceholders = ["♪", "♫", "♩"]
+    private var lyricplaceholder = "♪"
+    private var lyricplaceholderchanged = Date.distantPast
+    private var showinglyricplaceholder = false
 
     init(engine: PlaybackEngine, settings: Settings, library: LibraryStore, lyrics: LyricsStore) {
         self.engine = engine
@@ -40,7 +44,7 @@ final class NowPlayingCenter: @unchecked Sendable {
             return .success
         }
         for cmd in [c.playCommand, c.pauseCommand, c.togglePlayPauseCommand, c.nextTrackCommand, c.previousTrackCommand, c.changePlaybackPositionCommand, c.likeCommand] { cmd.isEnabled = true }
-        lyricTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
+        lyricTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self, self.settings.lockscreenlyrics, self.engine.isplaying else { return }
             self.refresh()
         }
@@ -54,14 +58,36 @@ final class NowPlayingCenter: @unchecked Sendable {
         let s = library.shown(t)
         var artist = s.artist
         if settings.lockscreenlyrics {
-            if let line = lyrics.currentline(for: t.id, at: engine.livepos()) { artist = line }
-            else if !lyricsrequested.contains(t.id) {
-                lyricsrequested.insert(t.id)
-                Task { @MainActor [weak self] in
-                    await self?.lyrics.load(t)
-                    self?.refresh()
+            if let line = lyrics.currentlyric(for: t.id, at: engine.livepos()) {
+                showinglyricplaceholder = false
+                // replace and current show the romanized line, below shows "original · romanized"; latin lines have no romanization
+                let roman = line.roman?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                switch lyrics.romanmode(for: t.id, library: library) {
+                case "below": artist = roman.isEmpty ? line.text : "\(line.text) · \(roman)"
+                case "replace", "current": artist = roman.isEmpty ? line.text : roman
+                default: artist = line.text
+                }
+            } else {
+                let now = Date()
+                if !showinglyricplaceholder {
+                    lyricplaceholder = lyricplaceholders.randomElement() ?? "♪"
+                    lyricplaceholderchanged = now
+                    showinglyricplaceholder = true
+                } else if now.timeIntervalSince(lyricplaceholderchanged) >= 2 {
+                    lyricplaceholder = lyricplaceholders.filter { $0 != lyricplaceholder }.randomElement() ?? "♪"
+                    lyricplaceholderchanged = now
+                }
+                artist = lyricplaceholder
+                if !lyricsrequested.contains(t.id) {
+                    lyricsrequested.insert(t.id)
+                    Task { @MainActor [weak self] in
+                        await self?.lyrics.load(t)
+                        self?.refresh()
+                    }
                 }
             }
+        } else {
+            showinglyricplaceholder = false
         }
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: s.title,
@@ -85,13 +111,14 @@ final class NowPlayingCenter: @unchecked Sendable {
             let apple = settings.applecovers ? AppleCovers.shared.cached(artist: s.artist, album: s.album) : nil
             let canvas = settings.spotifycanvas && t.isspotify && SpotifyCanvas.shared.configured ? SpotifyCanvas.shared.cached(trackid: t.id) : nil
             if video == nil, !custom {
-                if settings.animatedcoverorder == "apple", let c = apple {
+                let order = library.animatedcoverorder(t.id) ?? settings.animatedcoverorder
+                if order == "apple", let c = apple {
                     preview = c.preview; vid = c.video; id = "wolf.apple." + AppleCovers.shared.key(artist: s.artist, album: s.album)
-                } else if settings.animatedcoverorder != "apple", let c = canvas {
+                } else if order != "apple", let c = canvas {
                     preview = c.preview; vid = c.video; id = "wolf.canvas." + t.id
-                } else if let c = settings.animatedcoverorder == "apple" ? canvas : apple {
+                } else if let c = order == "apple" ? canvas : apple {
                     preview = c.preview; vid = c.video
-                    id = settings.animatedcoverorder == "apple" ? "wolf.canvas." + t.id : "wolf.apple." + AppleCovers.shared.key(artist: s.artist, album: s.album)
+                    id = order == "apple" ? "wolf.canvas." + t.id : "wolf.apple." + AppleCovers.shared.key(artist: s.artist, album: s.album)
                 }
                 if settings.applecovers, apple == nil, !applerequested.contains(t.id) {
                     applerequested.insert(t.id)

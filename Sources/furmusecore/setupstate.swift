@@ -2,6 +2,9 @@ import Foundation
 
 struct SetupState: Codable, Equatable {
     var setupcompleted = false
+    var setupstep = 0
+    var mainservice = ""
+    var spotifypremium: Bool?
     var spotifyconfigured = false
     var spotifyauthenticated = false
     var selecteddeviceid: String?
@@ -20,7 +23,7 @@ struct SetupState: Codable, Equatable {
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case setupcompleted
+        case setupcompleted, setupstep, mainservice, spotifypremium
         case spotifyconfigured
         case spotifyauthenticated
         case selecteddeviceid
@@ -41,6 +44,9 @@ struct SetupState: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         setupcompleted = try c.decodeIfPresent(Bool.self, forKey: .setupcompleted) ?? false
+        setupstep = try c.decodeIfPresent(Int.self, forKey: .setupstep) ?? 0
+        mainservice = try c.decodeIfPresent(String.self, forKey: .mainservice) ?? ""
+        spotifypremium = try c.decodeIfPresent(Bool.self, forKey: .spotifypremium)
         spotifyconfigured = try c.decodeIfPresent(Bool.self, forKey: .spotifyconfigured) ?? false
         spotifyauthenticated = try c.decodeIfPresent(Bool.self, forKey: .spotifyauthenticated) ?? false
         selecteddeviceid = try c.decodeIfPresent(String.self, forKey: .selecteddeviceid)

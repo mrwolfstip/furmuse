@@ -19,6 +19,12 @@ enum YouTubePlaylistError: Error {
     }
 }
 
+struct YouTubePlaylistResult {
+    var title: String
+    var videos: [YouTubeVideo]
+    var warning: String?
+}
+
 // reads a public youtube playlist through the same web endpoints the youtube site uses, page by page.
 enum YouTubePlaylist {
     static func playlistid(from text: String) -> String? {
@@ -123,6 +129,7 @@ enum YouTubePlaylist {
     }
 
     private static func bootstrap(_ id: String) async -> WebClient? {
+        guard !Task.isCancelled else { return nil }
         var c = URLComponents(string: "https://www.youtube.com/playlist")!
         c.queryItems = [.init(name: "list", value: id), .init(name: "hl", value: "en"), .init(name: "gl", value: "US")]
         guard let url = c.url else { return nil }
@@ -140,6 +147,7 @@ enum YouTubePlaylist {
     }
 
     private static func browse(_ body: [String: Any], client: WebClient) async -> [String: Any]? {
+        guard !Task.isCancelled else { return nil }
         var c = URLComponents(string: "https://www.youtube.com/youtubei/v1/browse")!
         c.queryItems = [.init(name: "prettyPrint", value: "false"), .init(name: "key", value: client.key)]
         guard let url = c.url else { return nil }
@@ -174,8 +182,10 @@ enum YouTubePlaylist {
         }
     }
 
-    static func fetch(_ id: String, progress: @escaping (Int) -> Void) async throws -> (title: String, videos: [YouTubeVideo]) {
+    static func fetch(_ id: String, progress: @escaping (Int) -> Void) async throws -> YouTubePlaylistResult {
+        try Task.checkCancellation()
         guard let client = await bootstrap(id) else { throw YouTubePlaylistError.notfound }
+        try Task.checkCancellation()
         var videos: [YouTubeVideo] = []
         var token: String?
         var title: String?
@@ -183,17 +193,28 @@ enum YouTubePlaylist {
         if videos.isEmpty && token == nil { throw YouTubePlaylistError.notfound }
         progress(videos.count)
         var pages = 0
+        var warning: String?
         while let t = token, pages < 80 {
+            try Task.checkCancellation()
             pages += 1
             token = nil
-            guard let next = await browse(["continuation": t], client: client) else { break }
+            guard let next = await browse(["continuation": t], client: client) else {
+                try Task.checkCancellation()
+                warning = "youtube stopped answering after \(videos.count) videos. you can still import these results."
+                Log.w(.playlist, "youtube playlist \(id) continuation failed after page \(pages), returning \(videos.count) videos")
+                break
+            }
             walk(next, videos: &videos, token: &token, title: &title)
             progress(videos.count)
+        }
+        if token != nil, pages >= 80 {
+            warning = "this playlist was unusually long. the first \(videos.count) playable videos are ready to import."
+            Log.w(.playlist, "youtube playlist \(id) reached continuation safety limit with \(videos.count) videos")
         }
         guard !videos.isEmpty else { throw YouTubePlaylistError.empty }
         // A playlist is an ordered sequence, not a set. Repeated videos are valid entries and
         // must survive import exactly where the owner placed them.
-        return (title ?? "youtube playlist", videos)
+        return YouTubePlaylistResult(title: title ?? "youtube playlist", videos: videos, warning: warning)
     }
 }
 
@@ -224,6 +245,7 @@ final class YouTubeImportPlanner: ObservableObject, @unchecked Sendable {
     @Published private(set) var done = 0
     @Published private(set) var total = 0
     @Published var items: [Item] = []
+    @Published private(set) var warning: String?
     private var cancelled = false
 
     func cancel() { cancelled = true }
@@ -247,13 +269,18 @@ final class YouTubeImportPlanner: ObservableObject, @unchecked Sendable {
         return (ch.isEmpty ? nil : ch, t.isEmpty ? v.title : t)
     }
 
-    private static func yttrack(_ v: YouTubeVideo) -> Track {
+    static func yttrack(_ v: YouTubeVideo) -> Track {
         let p = parse(v)
         return Track(id: Track.ytprefix + v.id, title: p.title, artist: p.artist ?? v.channel, album: "", artwork: YouTubeSearch.thumbnail(v.id)?.absoluteString, duration: v.duration ?? 0)
     }
 
     // ---- matching ------------------------------------------------------------------------------------------------------
-    private func plan(_ v: YouTubeVideo, api: SpotifyAPI) async -> Item {
+    // api is nil when spotify isn't connected: the video is then imported as a youtube-only track
+    func plan(_ v: YouTubeVideo, api: SpotifyAPI?) async -> Item {
+        guard let api = api else {
+            return Item(video: v, track: Self.yttrack(v), spotifymatched: false, source: v.candidate, sourcescore: nil, alternatives: [], confidence: .nospotify,
+                        notes: ["spotify isn't connected; will be added as a youtube-only track"])
+        }
         let p = Self.parse(v)
         var queries: [String] = []
         if let a = p.artist { queries.append("\(a) \(p.title)") }
@@ -301,15 +328,18 @@ final class YouTubeImportPlanner: ObservableObject, @unchecked Sendable {
     }
 
     @MainActor
-    func run(link: String, api: SpotifyAPI) async {
+    func run(link: String, api: SpotifyAPI?) async {
         cancelled = false
         guard let id = YouTubePlaylist.playlistid(from: link) else { phase = .failed(YouTubePlaylistError.badlink.text); return }
         playlistid = id
-        phase = .fetching; found = 0; items = []
-        let fetched: (title: String, videos: [YouTubeVideo])
+        phase = .fetching; found = 0; items = []; warning = nil
+        let fetched: YouTubePlaylistResult
         do { fetched = try await YouTubePlaylist.fetch(id) { n in Task { @MainActor in self.found = n } } }
+        catch is CancellationError { phase = .idle; return }
         catch { phase = .failed((error as? YouTubePlaylistError)?.text ?? "couldn't read the playlist"); return }
+        guard !cancelled, !Task.isCancelled else { phase = .idle; return }
         playlisttitle = fetched.title
+        warning = fetched.warning
         phase = .matching; done = 0; total = fetched.videos.count
         // a few at a time: fast enough for big playlists, gentle enough for spotify's rate limit
         var results: [Int: Item] = [:]
@@ -322,6 +352,7 @@ final class YouTubeImportPlanner: ObservableObject, @unchecked Sendable {
                 next += 1
             }
             while let (i, it) = await g.next() {
+                if cancelled || Task.isCancelled { g.cancelAll(); break }
                 results[i] = it
                 done += 1
                 if next < videos.count, !cancelled {
@@ -331,7 +362,7 @@ final class YouTubeImportPlanner: ObservableObject, @unchecked Sendable {
                 }
             }
         }
-        if cancelled { phase = .idle; return }
+        if cancelled || Task.isCancelled { phase = .idle; return }
         items = fetched.videos.indices.compactMap { results[$0] }
         phase = .ready
     }

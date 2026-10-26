@@ -52,7 +52,6 @@ struct TrackRow: View {
     @EnvironmentObject var engine: PlaybackEngine
     @EnvironmentObject var settings: Settings
     @EnvironmentObject var library: LibraryStore
-    @EnvironmentObject var devices: DeviceManager
     @EnvironmentObject var downloads: DownloadManager
     @State private var creating = false
     @State private var pendingsource: PendingSource?
@@ -87,11 +86,20 @@ struct TrackRow: View {
             Menu {
                 Button { engine.enqueue(track) } label: { SwiftUI.Label("add to queue", systemImage: "text.append") }
                 Button { engine.enqueue(track, next: true) } label: { SwiftUI.Label("play next", systemImage: "text.insert") }
-                Button { Task { await devices.playsingle(track) } } label: { SwiftUI.Label("play on connect device", systemImage: "hifispeaker") }
-                Button { library.addtolibrary(track, via: "saved") } label: { SwiftUI.Label(library.inlibrary(track.id) ? "in your library" : "save to library", systemImage: library.inlibrary(track.id) ? "heart.fill" : "heart") }
+                Divider()
+                if library.inlibrary(track.id) {
+                    Button(role: .destructive) { library.removefromlibrary(track.id) } label: {
+                        SwiftUI.Label("remove from library", systemImage: "heart.slash")
+                    }
+                } else {
+                    Button { library.addtolibrary(track, via: "saved") } label: {
+                        SwiftUI.Label("save to library", systemImage: "heart")
+                    }
+                }
                 if track.isspotify {
                     Button { pendingsource = PendingSource(track: track, all: [track], index: 0, play: false) } label: { SwiftUI.Label("choose youtube source…", systemImage: "play.rectangle") }
                 }
+                Divider()
                 if downloads.has(track) {
                     Button { downloads.remove(track.id) } label: { SwiftUI.Label("remove download", systemImage: "trash") }
                 } else {
@@ -219,8 +227,8 @@ struct SearchView: View {
             Track(
                 id: Track.ytprefix + candidate.id,
                 title: candidate.title,
-                artist: candidate.channel.isEmpty ? "YouTube" : candidate.channel,
-                album: "YouTube",
+                artist: candidate.channel.isEmpty ? "youtube" : candidate.channel,
+                album: "youtube",
                 artwork: YouTubeSearch.thumbnail(candidate.id)?.absoluteString,
                 duration: candidate.duration ?? 0
             )

@@ -9,27 +9,37 @@ struct LibraryView: View {
     @State private var importkind: ImportKind?
     @State private var filter = ""
 
-    enum ImportKind: String, Identifiable { case spotify, file; var id: String { rawValue } }
+    enum ImportKind: String, Identifiable { case spotify, file, youtubeplaylist, youtubelink; var id: String { rawValue } }
 
-    private var songs: [Track] { library.allsongs }
+    private var songs: [Track] {
+        library.allsongs.sorted {
+            let a = library.shown($0)
+            let b = library.shown($1)
+            let title = a.title.localizedCaseInsensitiveCompare(b.title)
+            return title == .orderedSame
+                ? a.artist.localizedCaseInsensitiveCompare(b.artist) == .orderedAscending
+                : title == .orderedAscending
+        }
+    }
 
     private func firstartist(_ t: Track) -> String { library.primaryartist(t) }
 
     var body: some View {
         List {
-            Section {
-                Picker("library section", selection: $sub) {
-                    Text("playlists").tag(0)
-                    Text("artists").tag(1)
-                    Text("albums").tag(2)
-                    Text("songs").tag(3)
-                }
-                .pickerStyle(.segmented)
+            Picker("library section", selection: $sub) {
+                Text("playlists").tag(0)
+                Text("artists").tag(1)
+                Text("albums").tag(2)
+                Text("songs").tag(3)
             }
+            .pickerStyle(.segmented)
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             .listRowBackground(Color.clear)
             if sub == 0 { playlists } else if sub == 1 { artists } else if sub == 2 { albums } else { songlist }
         }
         .themed()
+        .listStyle(.plain)
+        .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 72) }
         .navigationTitle("library")
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $filter, prompt: sub == 1 ? "artists" : (sub == 2 ? "albums" : (sub == 0 ? "playlists" : "songs")))
@@ -42,15 +52,15 @@ struct LibraryView: View {
         }
         .refreshable { update() }
         .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button { update() } label: { SwiftUI.Label("update library", systemImage: "arrow.triangle.2.circlepath") }
-                    .accessibilityLabel("update library")
-            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
+                    Button { update() } label: { SwiftUI.Label("update library", systemImage: "arrow.triangle.2.circlepath") }
+                    Divider()
                     Button { importkind = .file } label: { SwiftUI.Label("add your own song", systemImage: "plus.circle") }
                     Button { importkind = .spotify } label: { SwiftUI.Label("spotify playlist", systemImage: "music.note.list") }
-                } label: { SwiftUI.Label("import", systemImage: "square.and.arrow.down") }
+                    Button { importkind = .youtubeplaylist } label: { SwiftUI.Label("youtube playlist", systemImage: "play.rectangle.on.rectangle") }
+                    Button { importkind = .youtubelink } label: { SwiftUI.Label("youtube link", systemImage: "link") }
+                } label: { SwiftUI.Label("library actions", systemImage: "plus") }
             }
         }
         .sheet(isPresented: $creating) { NewPlaylistSheet { library.addplaylist($0) } }
@@ -58,6 +68,8 @@ struct LibraryView: View {
             switch k {
             case .spotify: SpotifyImportView()
             case .file: AddTrackView()
+            case .youtubeplaylist: YouTubeImportView()
+            case .youtubelink: YouTubeSongView()
             }
         }
     }
@@ -143,7 +155,10 @@ struct LibraryView: View {
         if all.isEmpty {
             Text(songs.isEmpty ? "songs appear here after you play or import them." : "no matches").foregroundColor(.secondary)
         } else {
-            ForEach(Array(all.enumerated()), id: \.element.id) { i, t in TrackRow(track: t, all: all, i: i) }
+            ForEach(Array(all.enumerated()), id: \.element.id) { i, t in
+                TrackRow(track: t, all: all, i: i)
+                    .listRowBackground(Color.clear)
+            }
         }
     }
 }
@@ -219,7 +234,7 @@ struct ArtistTracksView: View {
     }
 }
 
-// An album's page: same look as the artist page, with the album cover and the songs in track order.
+// An album's page: same look as the artist page, with the album cover and songs alphabetically.
 struct AlbumTracksView: View {
     let key: String
     @EnvironmentObject var library: LibraryStore
@@ -231,8 +246,7 @@ struct AlbumTracksView: View {
     var body: some View {
         let g = group
         let all = (g?.tracks ?? []).sorted {
-            let a = $0.tracknumber ?? Int.max, b = $1.tracknumber ?? Int.max
-            return a != b ? a < b : library.shown($0).title.lowercased() < library.shown($1).title.lowercased()
+            library.shown($0).title.localizedCaseInsensitiveCompare(library.shown($1).title) == .orderedAscending
         }
         CoverPage(url: all.lazy.compactMap { library.shown($0).artworkurl }.first) { image in
             List {

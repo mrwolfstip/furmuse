@@ -19,3 +19,8 @@ xcuserdata/
 *.env
 .env.*
 watermarks-remover/
+build/
+.build/
+DerivedData/
+*.ipa
+.DS_Store

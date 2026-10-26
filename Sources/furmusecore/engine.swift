@@ -24,6 +24,7 @@ final class PlaybackEngine: ObservableObject {
     let graph = SharedAudioGraph()
     private var source: PlaybackSource?
     private var token = UUID()
+    private var loadtask: Task<Void, Never>?
     private var retried = false
     private var tick: Timer?
     private var bag = Set<AnyCancellable>()
@@ -43,6 +44,7 @@ final class PlaybackEngine: ObservableObject {
             guard let self = self, let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
             if type == .began { if self.isplaying { Log.i(.playback, "interruption began"); self.pause() } } else {
                 let opts = AVAudioSession.InterruptionOptions(rawValue: n.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+                if self.settings.backend == .librespot { Task { @MainActor in LibrespotSession.shared.kick() } }
                 if opts.contains(.shouldResume), self.current != nil, !self.isplaying { self.resume() }
             }
         }.store(in: &bag)
@@ -192,6 +194,9 @@ final class PlaybackEngine: ObservableObject {
 
     private func teardown() {
         token = UUID()
+        loadtask?.cancel()
+        loadtask = nil
+        if let id = current?.id { resolver.cancel(id) }
         stoptick()
         source?.onEnd = nil
         source?.onFail = nil
@@ -209,6 +214,11 @@ final class PlaybackEngine: ObservableObject {
     }
 
     private func load(_ t: Track) {
+        // A load is a new request even when there is no live source (for example retrying after a
+        // failed prepare). This makes every play/skip generation unique and cancels any older work.
+        loadtask?.cancel()
+        if let old = current?.id { resolver.cancel(old) }
+        token = UUID()
         current = t
         position = 0
         duration = t.duration
@@ -218,13 +228,15 @@ final class PlaybackEngine: ObservableObject {
         retried = false
         onstatechange?()
         let gen = token
-        Task { @MainActor [weak self] in
+        loadtask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
                 let src = try await self.makesource(t, fresh: false)
+                try Task.checkCancellation()
                 guard gen == self.token else { src.stop(); return }
-                self.start(src, t)
+                self.start(src, t, generation: gen)
             } catch {
+                if error is CancellationError { return }
                 guard gen == self.token else { return }
                 self.fail(t, error)
             }
@@ -333,14 +345,25 @@ final class PlaybackEngine: ObservableObject {
         }
     }
 
-    private func start(_ src: PlaybackSource, _ t: Track) {
+    private func start(_ src: PlaybackSource, _ t: Track, generation gen: UUID) {
+        guard gen == token else { src.stop(); return }
+        loadtask = nil
         source = src
         sourcekind = src.kind
         sourceinfo = src.info
         duration = src.duration > 0 ? src.duration : t.duration
-        src.onEnd = { [weak self] in self?.itemended() }
-        src.onFail = { [weak self] why in self?.sourcefailed(t, why) }
-        if let w = src as? WebPlaybackSource { wirewebremote(w) }
+        src.onEnd = { [weak self, weak src] in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.itemended(source: src, generation: gen)
+        }
+        src.onFail = { [weak self, weak src] why in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.sourcefailed(t, why, source: src, generation: gen)
+        }
+        if let w = src as? WebPlaybackSource { wirewebremote(w, generation: gen) }
+        if let s = src as? SpotifyPlaybackSource, s.connectmanaged {
+            wirelibrespotremote(s, generation: gen)
+        }
         src.apply(settings, playing: false)
         graph.apply(settings)
         let swap = swapping
@@ -390,13 +413,14 @@ final class PlaybackEngine: ObservableObject {
         swapping = (pos, was)
         onstatechange?()
         let gen = token
-        Task { @MainActor [weak self] in
+        loadtask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             do {
                 let s = try await self.makesource(t, fresh: false)
                 guard gen == self.token else { s.stop(); return }
-                self.start(s, t)
+                self.start(s, t, generation: gen)
             } catch {
+                if error is CancellationError { return }
                 guard gen == self.token else { return }
                 self.swapping = nil
                 self.fail(t, error)
@@ -417,13 +441,14 @@ final class PlaybackEngine: ObservableObject {
         swapping = (pos, was)
         onstatechange?()
         let gen = token
-        Task { @MainActor [weak self] in
+        loadtask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let next = try await self.makesource(t, fresh: false)
                 guard gen == self.token else { next.stop(); return }
-                self.start(next, t)
+                self.start(next, t, generation: gen)
             } catch {
+                if error is CancellationError { return }
                 guard gen == self.token else { return }
                 self.swapping = nil
                 self.fail(t, error)
@@ -431,8 +456,11 @@ final class PlaybackEngine: ObservableObject {
         }
     }
 
-    private func sourcefailed(_ t: Track, _ why: String) {
-        guard current == t else { return }
+    private func sourcefailed(_ t: Track, _ why: String, source failedSource: PlaybackSource, generation gen: UUID) {
+        guard token == gen, current == t, source === failedSource else {
+            Log.i(.playback, "ignored stale failure for \(t.id)")
+            return
+        }
         Log.e(.playback, "source failed for \(t.id): \(why)")
         let kind = source?.kind
         if !retried, kind == .youtube {
@@ -442,13 +470,17 @@ final class PlaybackEngine: ObservableObject {
             teardown()
             token = gen
             loading = true
-            Task { @MainActor [weak self] in
+            loadtask = Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 do {
                     let s = try await self.makesource(t, fresh: true)
                     guard gen == self.token else { s.stop(); return }
-                    self.start(s, t)
-                } catch { self.fail(t, error) }
+                    self.start(s, t, generation: gen)
+                } catch {
+                    if error is CancellationError { return }
+                    guard gen == self.token else { return }
+                    self.fail(t, error)
+                }
             }
         } else {
             teardown()
@@ -456,8 +488,11 @@ final class PlaybackEngine: ObservableObject {
         }
     }
 
-    private func itemended() {
-        guard let t = current, isplaying else { return }
+    private func itemended(source endedSource: PlaybackSource, generation gen: UUID) {
+        guard token == gen, source === endedSource, let t = current, isplaying else {
+            Log.i(.playback, "ignored stale end callback")
+            return
+        }
         let dur = duration
         let at = source?.position ?? dur
         if dur - at > 5 { Log.w(.playback, "track ended early: source reported the end at \(fmttime(at)) of \(fmttime(dur)) (\(source?.info ?? "?"))") }
@@ -489,6 +524,8 @@ final class PlaybackEngine: ObservableObject {
 
     // ---- spotify connect -----------------------------------------------------------------------------------------
     private var adopting = false
+    private var adoptiontoken = UUID()
+    private lazy var spotifyapi = SpotifyAPI(auth: auth)
 
     // call once at launch. the connect session itself is started by LibrespotSession.ensure (needs the playback sign-in).
     func startconnect() {
@@ -512,11 +549,19 @@ final class PlaybackEngine: ObservableObject {
             if src.driven { return }                                  // already following spotify; the source retargets itself
             if src.wantsplaying || src.track.uri == info.uri { return }   // furmuse is playing this device itself
         }
-        adoptweb(info, s)
+        let request = UUID(); adoptiontoken = request
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let fallback = info.track
+            let track: Track
+            do { track = try await self.spotifyapi.track(info.id) }
+            catch { track = fallback; Log.w(.connect, "spotify metadata lookup failed for \(info.id), using player state: \(error.localizedDescription)") }
+            guard request == self.adoptiontoken else { return }
+            self.adoptweb(track, s)
+        }
     }
 
-    private func adoptweb(_ info: WebTrackInfo, _ s: WebPlayerState) {
-        let t = info.track
+    private func adoptweb(_ t: Track, _ s: WebPlayerState) {
         library.remember([t])
         adopting = true
         leave(.skipped)
@@ -526,28 +571,41 @@ final class PlaybackEngine: ObservableObject {
         loading = true; sourceinfo = ""; sourcekind = nil
         onstatechange?()
         let gen = token
-        Task { @MainActor [weak self] in
+        loadtask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             await self.activatesessionasync()
+            guard !Task.isCancelled, gen == self.token else { return }
             let src = WebPlaybackSource(track: t, auth: self.auth, driven: true)
             do { try await src.prepare() } catch {
+                if error is CancellationError { return }
                 guard gen == self.token else { return }
                 self.fail(t, error); return
             }
             guard gen == self.token else { src.stop(); return }
-            self.startwebdriven(src, t, s)
+            self.startwebdriven(src, t, s, generation: gen)
         }
     }
 
-    private func startwebdriven(_ src: WebPlaybackSource, _ t: Track, _ s: WebPlayerState) {
+    private func startwebdriven(_ src: WebPlaybackSource, _ t: Track, _ s: WebPlayerState, generation gen: UUID) {
+        guard gen == token else { src.stop(); return }
+        loadtask = nil
         source = src
         sourcekind = .spotify
         sourceinfo = "spotify connect · web playback sdk (speed, eq and reverb don't apply)"
         duration = src.duration > 0 ? src.duration : t.duration
-        src.onFail = { [weak self] why in self?.sourcefailed(t, why) }
-        wirewebremote(src)
-        src.onretarget = { [weak self] old, new, natural in self?.drivenretarget(old, new, natural) }
-        src.ondrivenstopped = { [weak self] in self?.drivenstopped() }
+        src.onFail = { [weak self, weak src] why in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.sourcefailed(t, why, source: src, generation: gen)
+        }
+        wirewebremote(src, generation: gen)
+        src.onretarget = { [weak self, weak src] old, new, natural in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.drivenretarget(old, new, natural)
+        }
+        src.ondrivenstopped = { [weak self, weak src] in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.drivenstopped()
+        }
         src.adopt(with: s)
         loading = false
         isplaying = !s.paused
@@ -559,8 +617,11 @@ final class PlaybackEngine: ObservableObject {
     }
 
     // spotify (the app, a speaker) paused or resumed this device: keep furmuse's play state and now playing in step
-    private func wirewebremote(_ src: WebPlaybackSource) {
-        src.onremoteplaying = { [weak self] playing in self?.remoteplaying(playing) }
+    private func wirewebremote(_ src: WebPlaybackSource, generation gen: UUID) {
+        src.onremoteplaying = { [weak self, weak src] playing in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.remoteplaying(playing)
+        }
     }
 
     private func remoteplaying(_ playing: Bool) {
@@ -570,6 +631,20 @@ final class PlaybackEngine: ObservableObject {
         else { position = livepos(); stoptick(); bus.send(.paused(t, position)) }
         Log.i(.connect, playing ? "resumed from spotify" : "paused from spotify")
         onstatechange?()
+    }
+
+    // A librespot source launched from Furmuse's own queue becomes Connect-managed as soon as
+    // Spotify activates this device. From then on another Spotify client can replace the track or
+    // pause/resume it, so forward the source's state into the engine just like driven playback.
+    private func wirelibrespotremote(_ src: SpotifyPlaybackSource, generation gen: UUID) {
+        src.ondrivenstate = { [weak self, weak src] playing in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.remoteplaying(playing)
+        }
+        src.onretarget = { [weak self, weak src] old, new, natural in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.drivenretarget(old, new, natural)
+        }
     }
 
     private func connectevent(_ e: BridgeEvent) {
@@ -593,9 +668,28 @@ final class PlaybackEngine: ObservableObject {
             }
         case .trackchanged(let t):
             guard session.connectisactive else { return }   // a furmuse-initiated load also emits this; ignore it
-            library.remember([t.track])
-            if let src = source as? SpotifyPlaybackSource, src.driven || src.connectmanaged { src.retarget(t.track) }
-            else { adoptconnect(t.track) }
+            let fallback = t.track
+            let request = UUID(); adoptiontoken = request
+            // Audio has already changed inside librespot. Never hold the visible player on the old
+            // song while a Web API metadata request is in flight: adopt the bridge metadata now,
+            // then enrich the same identity when/if Spotify answers.
+            library.remember([fallback])
+            if let src = source as? SpotifyPlaybackSource, src.driven || src.connectmanaged { src.retarget(fallback, immediate: true) }
+            else { adoptconnect(fallback) }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let track: Track
+                do { track = try await self.spotifyapi.track(fallback.id) }
+                catch { Log.w(.connect, "spotify metadata lookup failed for \(fallback.id), keeping librespot event: \(error.localizedDescription)"); return }
+                guard request == self.adoptiontoken, session.connectisactive else { return }
+                guard self.current?.id == track.id else { return }
+                self.library.remember([track])
+                self.current = track
+                if self.queue.indices.contains(self.index) { self.queue[self.index] = track }
+                self.duration = track.duration
+                Log.i(.connect, "enriched spotify connect metadata for \(track.id)")
+                self.onstatechange?()
+            }
         default: break
         }
     }
@@ -610,28 +704,44 @@ final class PlaybackEngine: ObservableObject {
         loading = true; sourceinfo = ""; sourcekind = nil
         onstatechange?()
         let gen = token
-        Task { @MainActor [weak self] in
+        loadtask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             await self.activatesessionasync()
+            guard !Task.isCancelled, gen == self.token else { return }
             let src = SpotifyPlaybackSource(track: t, graph: self.graph, auth: self.auth, driven: true)
             do { try await src.prepare() } catch {
+                if error is CancellationError { return }
                 guard gen == self.token else { return }
                 self.fail(t, error); return
             }
             guard gen == self.token else { src.stop(); return }
-            self.startdriven(src, t)
+            self.startdriven(src, t, generation: gen)
         }
     }
 
-    private func startdriven(_ src: SpotifyPlaybackSource, _ t: Track) {
+    private func startdriven(_ src: SpotifyPlaybackSource, _ t: Track, generation gen: UUID) {
+        guard gen == token else { src.stop(); return }
+        loadtask = nil
         source = src
         sourcekind = .spotify
         sourceinfo = "spotify connect · librespot pcm"
         duration = t.duration
-        src.onFail = { [weak self] why in self?.sourcefailed(t, why) }
-        src.ondrivenstate = { [weak self] playing in self?.drivenstate(playing) }
-        src.onretarget = { [weak self] old, new, natural in self?.drivenretarget(old, new, natural) }
-        src.ondrivenstopped = { [weak self] in self?.drivenstopped() }
+        src.onFail = { [weak self, weak src] why in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.sourcefailed(t, why, source: src, generation: gen)
+        }
+        src.ondrivenstate = { [weak self, weak src] playing in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.drivenstate(playing)
+        }
+        src.onretarget = { [weak self, weak src] old, new, natural in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.drivenretarget(old, new, natural)
+        }
+        src.ondrivenstopped = { [weak self, weak src] in
+            guard let self, let src, self.token == gen, self.source === src else { return }
+            self.drivenstopped()
+        }
         src.apply(settings, playing: false)
         graph.apply(settings)
         src.adopt()

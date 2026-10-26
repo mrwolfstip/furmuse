@@ -21,6 +21,8 @@ struct LyricCardSpec {
     var title: String
     var artist: String
     var lines: [String]
+    var romanlines: [String]? = nil   // romanization of each line (same order, "" for a line without one); nil = romanization off
+    var romanstyle = "replace"        // replace: romanized lines instead of the originals. below: a smaller line under each original
     var background: CardBackground
     var color: UIColor            // the solid colour (also what shows if the chosen picture isn't available)
     var blur: CGFloat             // gaussian radius in points on the 1080 px card; 0 = sharp
@@ -82,17 +84,48 @@ enum LyricCardRenderer {
             draw(s.title, in: CGRect(x: headerX, y: 78, width: 1080 - headerX - margin, height: 58), font: .systemFont(ofSize: 36, weight: .bold), color: fg)
             draw(s.artist, in: CGRect(x: headerX, y: 137, width: 1080 - headerX - margin, height: 44), font: .systemFont(ofSize: 29, weight: .medium), color: fg.withAlphaComponent(0.74))
 
-            let text = s.lines.joined(separator: "\n")
             var fontSize: CGFloat = min(s.lyricsize, s.lines.count >= 4 ? 56 : 76)
             let lyricRect = CGRect(x: margin, y: 260, width: 1080 - margin * 2, height: 650)
-            while fontSize > 38 {
-                let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: fontSize, weight: .bold), .paragraphStyle: paragraph(lineSpacing: 8)]
-                if (text as NSString).boundingRect(with: lyricRect.size, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attrs, context: nil).height <= lyricRect.height { break }
+            // the whole block (originals and any romanized sub-lines) is measured together, so it always fits
+            let floor: CGFloat = hasbelow(s) ? 26 : 38
+            while fontSize > floor {
+                if block(s, size: fontSize, color: fg).boundingRect(with: lyricRect.size, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height <= lyricRect.height { break }
                 fontSize -= 2
             }
-            draw(text, in: lyricRect, font: .systemFont(ofSize: fontSize, weight: .bold), color: fg, lineSpacing: 8)
+            block(s, size: fontSize, color: fg).draw(with: lyricRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
             if s.brand { draw("furmuse", in: CGRect(x: margin, y: 970, width: 400, height: 50), font: .systemFont(ofSize: 28, weight: .semibold), color: fg.withAlphaComponent(0.76)) }
         }
+    }
+
+    private static func hasbelow(_ s: LyricCardSpec) -> Bool {
+        s.romanstyle == "below" && (s.romanlines ?? []).contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    // the lyric text as one attributed block. replace swaps in the romanized lines; below puts a smaller, dimmer romanized
+    // line under each original that has one. without romanization this is the plain bold text it always was.
+    private static func block(_ s: LyricCardSpec, size: CGFloat, color: UIColor) -> NSAttributedString {
+        let romans = s.romanlines ?? []
+        func roman(_ i: Int) -> String { i < romans.count ? romans[i].trimmingCharacters(in: .whitespaces) : "" }
+        let out = NSMutableAttributedString()
+        func add(_ text: String, font: UIFont, color: UIColor, after: CGFloat, last: Bool) {
+            let p = paragraph(lineSpacing: 8); p.paragraphSpacing = after
+            out.append(NSAttributedString(string: text + (last ? "" : "\n"), attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p]))
+        }
+        let main = UIFont.systemFont(ofSize: size, weight: .bold)
+        let sub = UIFont.systemFont(ofSize: size * 0.58, weight: .semibold)
+        for (i, line) in s.lines.enumerated() {
+            let last = i == s.lines.count - 1
+            let r = roman(i)
+            if s.romanstyle == "below", !r.isEmpty {
+                add(line, font: main, color: color, after: 2, last: false)
+                add(r, font: sub, color: color.withAlphaComponent(0.7), after: last ? 0 : size * 0.3, last: last)
+            } else if s.romanstyle == "replace", !r.isEmpty {
+                add(r, font: main, color: color, after: 0, last: last)
+            } else {
+                add(line, font: main, color: color, after: 0, last: last)
+            }
+        }
+        return out
     }
 
     // the picture, scaled to fill the card and then gaussian blurred. the edges are clamped before blurring, so the blur

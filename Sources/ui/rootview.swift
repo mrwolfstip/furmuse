@@ -20,7 +20,8 @@ struct RootView: View {
         guard let track = engine.current else { return "" }
         let shown = library.shown(track)
         let video = animatedURL(for: track, shown: shown)?.absoluteString ?? ""
-        return "\(shown.artwork ?? shown.id)|\(video)|\(settings.showanimatedplayer)"
+        let order = library.animatedcoverorder(track.id) ?? settings.animatedcoverorder
+        return "\(shown.artwork ?? shown.id)|\(video)|\(order)|\(settings.showanimatedplayer)"
     }
 
     private func animatedURL(for track: Track, shown: Track) -> URL? {
@@ -28,7 +29,7 @@ struct RootView: View {
         guard library.data.overrides[track.id]?.artwork == nil else { return nil }
         let apple = settings.applecovers ? appleCovers.cached(artist: shown.artist, album: shown.album)?.video : nil
         let canvas = settings.spotifycanvas && track.isspotify ? spotifyCanvas.cached(trackid: track.id)?.video : nil
-        if settings.animatedcoverorder == "apple" { return apple ?? canvas }
+        if (library.animatedcoverorder(track.id) ?? settings.animatedcoverorder) == "apple" { return apple ?? canvas }
         return canvas ?? apple
     }
 
@@ -55,6 +56,12 @@ struct RootView: View {
             }
         }
         .preferredColorScheme(settings.colorscheme)
+        .onOpenURL { url in
+            guard url.scheme?.lowercased() == AppConfig.spotifyredirectscheme else { return }
+            Log.i(.lifecycle, "opened from furmuse url: \(url.host ?? "unknown")")
+            // OAuth callbacks are consumed by ASWebAuthenticationSession. Player/live-activity
+            // links only need to foreground the existing root, whose default tab is now playing.
+        }
         .animation(.softease, value: showsloading)
         .task {
             guard showingLaunch else { return }
