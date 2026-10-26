@@ -45,6 +45,8 @@ it includes:
 
 ## install — easiest option
 
+## this option is not available yet. build it yourself instead.
+
 **use the release unless you specifically want to edit or build the app yourself.** it is the shortest and easiest option.
 
 1. open the [latest release](https://github.com/mrwolfstip/furmuse/releases/latest)
