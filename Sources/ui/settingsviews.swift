@@ -656,8 +656,8 @@ struct LibrarySettingsView: View {
             }
             exportdocument = nil
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.json], allowsMultipleSelection: false) { r in
-            guard case .success(let urls) = r, let u = urls.first else { return }
+        .copyPicker(isPresented: $importing, types: [.json, .plainText]) { urls in
+            guard let u = urls.first else { return }
             let n = library.importdata(u)
             ToastCenter.shared.show(n < 0 ? "couldn't read that file" : "added \(n) new items")
         }
