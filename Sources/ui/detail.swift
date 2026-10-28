@@ -300,8 +300,8 @@ struct LyricsView: View {
             else { artimage = nil }
             await loaded
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.plainText, .data], allowsMultipleSelection: false) { result in
-            guard let t = engine.current, case .success(let urls) = result, let u = urls.first else { return }
+        .copyPicker(isPresented: $importing, types: [.plainText, .data]) { urls in
+            guard let t = engine.current, let u = urls.first else { return }
             let scoped = u.startAccessingSecurityScopedResource()
             defer { if scoped { u.stopAccessingSecurityScopedResource() } }
             guard let text = LyricsText.read(u) else { ToastCenter.shared.show("couldn't read that file"); return }
