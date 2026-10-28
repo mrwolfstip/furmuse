@@ -115,8 +115,8 @@ struct AddTrackView: View {
                 ToolbarItem(placement: .navigationBarLeading) { Button("cancel") { presentation.wrappedValue.dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) { Button("add") { add() }.disabled(!ready || saving) }
             }
-            .fileImporter(isPresented: $pickingaudio, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in
-                guard case .success(let urls) = result, !urls.isEmpty else { return }
+            .copyPicker(isPresented: $pickingaudio, types: [.audio], multiple: true) { urls in
+                guard !urls.isEmpty else { return }
                 audios = urls
                 title = ""; cover = nil
                 if urls.count == 1 { artist = ""; album = ""; Task { await prefill(urls[0]) } }
