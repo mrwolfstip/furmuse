@@ -26,8 +26,8 @@ struct TrackSourceSection: View {
             Button(choice?.localaudio == nil ? "attach an audio file" : "replace audio file") { importing = true }
             if choice?.localaudio != nil { Button("remove file", role: .destructive) { library.detachlocal(track.id) } }
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let u = urls.first else { return }
+        .copyPicker(isPresented: $importing, types: [.audio]) { urls in
+            guard let u = urls.first else { return }
             Task { @MainActor in
                 if await library.attachlocalasync(track.id, from: u) { ToastCenter.shared.show("file attached") }
                 else { ToastCenter.shared.show("couldn't read that file") }
