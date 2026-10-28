@@ -17,6 +17,14 @@ struct PendingScrobble: Codable {
 
 enum LastfmState: Equatable { case notconfigured, signedout, authenticated, expired }
 
+struct LastfmTrackMetadata {
+    var album: String?
+    var albumartist: String?
+    var artwork: String?
+    var musicbrainzid: String?
+    var tracknumber: Int?
+}
+
 final class LastfmClient: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
     @Published private(set) var username: String?
     @Published private(set) var state: LastfmState = .signedout
@@ -166,6 +174,35 @@ final class LastfmClient: NSObject, ObservableObject, ASWebAuthenticationPresent
         UserDefaults.standard.removeObject(forKey: userkey)
         UserDefaults.standard.set(false, forKey: expiredkey)
         DispatchQueue.main.async { self.username = nil; self.lasterror = nil; self.refreshstate() }
+    }
+
+    // Last.fm's track.getInfo response is useful for YouTube-only songs that do
+    // not have a reliable Spotify match. Require the user's session even though
+    // the endpoint can be public, so metadata is only fetched when they opted in
+    // by signing in to Last.fm.
+    func metadata(artist: String, title: String) async throws -> LastfmTrackMetadata? {
+        guard loggedin else { return nil }
+        let j = try await call("track.getInfo", [
+            "artist": Track.firstname(artist),
+            "track": title,
+            "autocorrect": "1"
+        ], session: true)
+        guard let track = j["track"] as? [String: Any] else { return nil }
+        let album = track["album"] as? [String: Any]
+        let images = album?["image"] as? [[String: Any]] ?? []
+        let artwork = images.reversed().compactMap { ($0["#text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+        let albumTitle = (album?["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let albumArtist = (album?["artist"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mbid = (track["mbid"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attr = album?["@attr"] as? [String: Any]
+        let position = (attr?["position"] as? String).flatMap(Int.init)
+        return LastfmTrackMetadata(
+            album: albumTitle.flatMap { $0.isEmpty ? nil : $0 },
+            albumartist: albumArtist.flatMap { $0.isEmpty ? nil : $0 },
+            artwork: artwork,
+            musicbrainzid: mbid.flatMap { $0.isEmpty ? nil : $0 },
+            tracknumber: position
+        )
     }
 
     func nowplaying(_ t: Track) async throws {

@@ -177,7 +177,7 @@ struct SearchView: View {
             } else if results.isEmpty && searched {
                 Text("no results").foregroundColor(.secondary)
             } else {
-                Section(footer: Text(provider == "youtube" ? "showing youtube results because spotify search isn't available." : "")) {
+                Section(footer: Text(provider == "youtube" ? "showing youtube results because spotify search isn't available." : (provider == "youtube music" ? "showing youtube music songs for advanced youtube." : ""))) {
                     TrackListView(tracks: results) { t, all, i in choose(t, all, i) }
                 }
             }
@@ -204,7 +204,10 @@ struct SearchView: View {
         guard !q.isEmpty else { return }
         busy = true
         Task { @MainActor in
-            if auth.connected {
+            if settings.youtubebackend == .advanced {
+                results = await youtubeResults(q)
+                provider = "youtube music"
+            } else if auth.connected {
                 do {
                     results = try await Services.shared.api.search(q)
                     provider = "spotify"
@@ -223,15 +226,26 @@ struct SearchView: View {
     }
 
     private func youtubeResults(_ query: String) async -> [Track] {
-        Array(await YouTubeSearch.search(query).prefix(20)).map { candidate in
-            Track(
+        let found = settings.youtubebackend == .advanced
+            ? await AdvancedYouTubeClient.search(query, limit: 20)
+            : Array(await YouTubeSearch.search(query).prefix(20))
+        let spotifyMatches = auth.connected ? (try? await Services.shared.api.search(query)) ?? [] : []
+        return found.map { candidate in
+            var track = Track(
                 id: Track.ytprefix + candidate.id,
                 title: candidate.title,
-                artist: candidate.channel.isEmpty ? "youtube" : candidate.channel,
-                album: "youtube",
+                artist: candidate.channel.isEmpty ? (settings.youtubebackend == .advanced ? "youtube music" : "youtube") : candidate.channel,
+                album: settings.youtubebackend == .advanced ? "youtube music" : "youtube",
                 artwork: YouTubeSearch.thumbnail(candidate.id)?.absoluteString,
                 duration: candidate.duration ?? 0
             )
+            if let spotify = SpotifyArtwork.bestMatch(for: track, among: spotifyMatches) {
+                track.album = spotify.album
+                track.albumartist = spotify.albumartist
+                track.albumid = spotify.albumid
+                if let artwork = spotify.artwork { track.artwork = artwork }
+            }
+            return track
         }
     }
 }
@@ -359,10 +373,8 @@ struct LocalPlaylistView: View {
                     Section { PlayShuffleRow(tracks: tracks) }.listRowBackground(Color.clear)
                     Section {
                         if p.trackids.isEmpty { Text("empty. use the … menu on any track to add it here.").foregroundColor(.secondary) }
-                        ForEach(Array(p.trackids.enumerated()), id: \.offset) { _, tid in
-                            if let t = library.data.tracks[tid] {
-                                TrackRow(track: t, all: tracks, i: tracks.firstIndex(of: t) ?? 0)
-                            }
+                        ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
+                            TrackRow(track: track, all: tracks, i: position)
                         }
                         .onDelete { library.remove(trackat: $0, from: id) }
                         .onMove { library.move(from: $0, to: $1, in: id) }
@@ -411,7 +423,7 @@ struct LocalPlaylistView: View {
 struct QueueView: View {
     @EnvironmentObject var engine: PlaybackEngine
     @EnvironmentObject var library: LibraryStore
-    @Environment(\.editMode) private var editmode
+    @State private var showplayed = false
 
     private var hascurrent: Bool { engine.queue.indices.contains(engine.index) }
     private var upnext: [Int] { hascurrent && engine.index + 1 < engine.queue.count ? Array((engine.index + 1)..<engine.queue.count) : [] }
@@ -428,31 +440,40 @@ struct QueueView: View {
                 }.padding()
             } else {
                 List {
-                    Section(header: QueueHeader(title: "now playing")) {
-                        QueueRow(track: engine.queue[engine.index], playing: true, dimmed: false, isplaying: engine.isplaying)
+                    Section {
+                        QueueRow(track: engine.queue[engine.index], playing: true, dimmed: false, isplaying: engine.isplaying) { engine.toggle() }
                             .listRowBackground(NowPlayingCardBackground())
                             .listRowSeparator(.hidden)
+                    } header: {
+                        QueueHeader(title: "now playing", detail: "tap to \(engine.isplaying ? "pause" : "play")")
                     }
                     if !upnext.isEmpty {
                         Section(header: QueueHeader(title: "up next", detail: "\(upnext.count) \(upnext.count == 1 ? "song" : "songs") · \(queuetime(remaining))")) {
                             ForEach(upnext, id: \.self) { i in
-                                QueueRow(track: engine.queue[i], playing: false, dimmed: false, isplaying: false) { engine.jump(to: i) }
+                                QueueRow(track: engine.queue[i], playing: false, dimmed: false, isplaying: false, position: i - engine.index) { engine.jump(to: i) }
                                     .listRowBackground(Color.clear)
-                                    .listRowSeparator(.hidden)
+                                    .listRowSeparatorTint(Color.secondary.opacity(0.18))
                             }
                             .onDelete { engine.remove(at: IndexSet($0.map { $0 + engine.index + 1 })) }
                             .onMove { from, to in engine.move(from: IndexSet(from.map { $0 + engine.index + 1 }), to: to + engine.index + 1) }
                         }
                     }
                     if !earlier.isEmpty {
-                        Section(header: QueueHeader(title: "played")) {
-                            ForEach(earlier, id: \.self) { i in
-                                QueueRow(track: engine.queue[i], playing: false, dimmed: true, isplaying: false) { engine.jump(to: i) }
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparator(.hidden)
+                        Section {
+                            Button { withAnimation { showplayed.toggle() } } label: {
+                                HStack {
+                                    Label("\(earlier.count) previously played", systemImage: "clock.arrow.circlepath")
+                                    Spacer()
+                                    Image(systemName: showplayed ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold))
+                                }
+                                .foregroundColor(.secondary)
                             }
-                            .onDelete { engine.remove(at: $0) }
-                            .onMove { engine.move(from: $0, to: $1) }
+                            if showplayed {
+                                ForEach(earlier.reversed(), id: \.self) { i in
+                                    QueueRow(track: engine.queue[i], playing: false, dimmed: true, isplaying: false) { engine.jump(to: i) }
+                                        .listRowBackground(Color.clear)
+                                }
+                            }
                         }
                     }
                 }
@@ -462,7 +483,16 @@ struct QueueView: View {
         .themed()
         .navigationTitle("queue")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .navigationBarTrailing) { if hascurrent && engine.queue.count > 1 { EditButton() } } }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                if !upnext.isEmpty {
+                    Menu {
+                        Button(role: .destructive) { engine.clearUpcoming() } label: { Label("clear up next", systemImage: "trash") }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
+                if hascurrent && engine.queue.count > 1 { EditButton() }
+            }
+        }
     }
 
     private func queuetime(_ s: Double) -> String {
@@ -498,12 +528,19 @@ private struct QueueRow: View {
     let playing: Bool
     let dimmed: Bool
     let isplaying: Bool
+    var position: Int? = nil
     var onplay: (() -> Void)? = nil           // tapping the cover or the empty part of the row; the title and artist are links
     @EnvironmentObject var library: LibraryStore
 
     var body: some View {
         let s = library.shown(track)
         HStack(spacing: 12) {
+            if let position {
+                Text("\(position)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+                    .frame(width: 22, alignment: .trailing)
+            }
             TrackArt(track: track, size: playing ? 56 : 48, corner: 10)
                 .overlay(
                     Group {
@@ -531,7 +568,9 @@ private struct QueueRow: View {
             .contentShape(Rectangle())
             .onTapGesture { onplay?() }
         }
-        .padding(.vertical, playing ? 6 : 3)
+        .padding(.vertical, playing ? 10 : 5)
         .opacity(dimmed ? 0.5 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture { onplay?() }
     }
 }

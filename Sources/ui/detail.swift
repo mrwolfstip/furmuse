@@ -99,21 +99,48 @@ struct OverrideView: View {
     @State private var title = ""
     @State private var artist = ""
     @State private var album = ""
+    @State private var albumartist = ""
+    @State private var tracknumber = ""
+    @State private var duration = ""
+    @State private var musicbrainzid = ""
     @State private var picking = false
     @State private var pickingvideo = false
     @State fileprivate var cropsource: CropSource?
 
-    // what furmuse would show with no per-track override (spotify value, or a display rename)
-    private var fallbackartist: String { library.data.artistmap[track.artist] ?? track.artist }
-    private var fallbackalbum: String { library.data.albummap[track.album] ?? track.album }
-
-    private func field(_ s: String, _ fallback: String) -> String? {
-        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)   // only edge whitespace; case and spelling are kept as typed
-        return t.isEmpty || t == fallback ? nil : t
+    private func durationtext(_ value: Double) -> String {
+        if value.rounded() == value { return String(Int(value)) }
+        var text = String(format: "%.3f", value)
+        while text.last == "0" { text.removeLast() }
+        if text.last == "." { text.removeLast() }
+        return text
     }
 
     private func saveandclose() {
-        library.editmeta(track.id, title: field(title, track.title), artist: field(artist, fallbackartist), album: field(album, fallbackalbum))
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty, !cleanArtist.isEmpty,
+              let seconds = Double(duration.trimmingCharacters(in: .whitespacesAndNewlines)), seconds >= 0 else {
+            ToastCenter.shared.show("title, artist and duration must be valid")
+            return
+        }
+        let cleanAlbumArtist = albumartist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanMBID = musicbrainzid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let numberText = tracknumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let number = numberText.isEmpty ? nil : Int(numberText)
+        guard numberText.isEmpty || (number ?? 0) > 0 else {
+            ToastCenter.shared.show("track number must be empty or greater than zero")
+            return
+        }
+        library.edittrackmetadata(
+            track.id,
+            title: cleanTitle,
+            artist: cleanArtist,
+            album: album.trimmingCharacters(in: .whitespacesAndNewlines),
+            albumartist: cleanAlbumArtist.isEmpty ? nil : cleanAlbumArtist,
+            tracknumber: number,
+            duration: seconds,
+            musicbrainzid: cleanMBID.isEmpty ? nil : cleanMBID
+        )
         ToastCenter.shared.show("changes saved")
         dismiss()
     }
@@ -139,15 +166,25 @@ struct OverrideView: View {
                     }
                 }
             }
-            Section(header: Text("details"), footer: Text("these names only change how the song appears in furmuse.")) {
+            Section(header: Text("details"), footer: Text("these corrections are used throughout the library and for future last.fm submissions. the playback service and source are not changed.")) {
                 HStack { Text("title"); TextField("title", text: $title).multilineTextAlignment(.trailing) }
                 HStack { Text("artist"); TextField("artist", text: $artist).multilineTextAlignment(.trailing) }
                 HStack { Text("album"); TextField("album", text: $album).multilineTextAlignment(.trailing) }
+                HStack { Text("album artist"); TextField("optional", text: $albumartist).multilineTextAlignment(.trailing) }
+                HStack { Text("track number"); TextField("optional", text: $tracknumber).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
+                HStack { Text("duration (seconds)"); TextField("0", text: $duration).keyboardType(.decimalPad).multilineTextAlignment(.trailing) }
+                HStack { Text("musicbrainz id"); TextField("optional", text: $musicbrainzid).textInputAutocapitalization(.never).disableAutocorrection(true).multilineTextAlignment(.trailing) }
             }
             Section {
                 Button(role: .destructive) {
-                    title = track.title; artist = fallbackartist; album = fallbackalbum
-                } label: { Label("reset song details", systemImage: "arrow.counterclockwise") }
+                    title = track.title
+                    artist = track.artist
+                    album = track.album
+                    albumartist = track.albumartist ?? ""
+                    tracknumber = track.tracknumber.map(String.init) ?? ""
+                    duration = durationtext(track.duration)
+                    musicbrainzid = track.musicbrainzid ?? ""
+                } label: { Label("undo unsaved changes", systemImage: "arrow.counterclockwise") }
             }
         }
         .listStyle(.insetGrouped)
@@ -161,7 +198,13 @@ struct OverrideView: View {
         }
         .onAppear {
             let s = library.shown(track)
-            title = s.title; artist = s.artist; album = s.album
+            title = s.title
+            artist = s.artist
+            album = s.album
+            albumartist = track.albumartist ?? ""
+            tracknumber = track.tracknumber.map(String.init) ?? ""
+            duration = durationtext(track.duration)
+            musicbrainzid = track.musicbrainzid ?? ""
         }
         // picked media always goes through the crop step (1:1 or 3:4) before it is saved
         .sheet(isPresented: $picking) { ImagePicker { img in DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { cropsource = CropSource(kind: .image(img)) } } }

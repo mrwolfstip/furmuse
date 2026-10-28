@@ -11,13 +11,14 @@ struct SetupView: View {
     @State private var clientID = ""
     @State private var clientMessage: String?
     @State private var checkingClient = false
+    @State private var showingGoogleSignIn = false
     @State private var lastfmKey = ""
     @State private var lastfmSecret = ""
 
-    private enum Page: String { case welcome, service, spotifyAccount, spotifyPlayer, youtubeNotice, lastfm, finish }
+    private enum Page: String { case welcome, service, spotifyAccount, spotifyPlayer, youtubePlayer, youtubeNotice, lastfm, finish }
     private var pages: [Page] {
         if store.state.mainservice == "spotify" { return [.welcome, .service, .spotifyAccount, .spotifyPlayer, .lastfm, .finish] }
-        if store.state.mainservice == "youtube" { return [.welcome, .service, .youtubeNotice, .lastfm, .finish] }
+        if store.state.mainservice == "youtube" { return [.welcome, .service, .youtubePlayer, .youtubeNotice, .lastfm, .finish] }
         return [.welcome, .service]
     }
     private var index: Int { min(max(store.state.setupstep, 0), pages.count - 1) }
@@ -52,6 +53,7 @@ struct SetupView: View {
         case .service: servicePage
         case .spotifyAccount: spotifyAccountPage
         case .spotifyPlayer: spotifyPlayerPage
+        case .youtubePlayer: youtubePlayerPage
         case .youtubeNotice: youtubePage
         case .lastfm: lastfmPage
         case .finish: centered { VStack(spacing: 18) { Image(systemName: "checkmark.circle.fill").font(.system(size: 54)).foregroundColor(.green); Text("you're all set").font(.largeTitle.bold()); Text("you can change everything later in settings.").foregroundColor(.secondary); primary("start listening") { store.completesetup() }; backButton } }
@@ -104,6 +106,33 @@ struct SetupView: View {
 
     private var youtubePage: some View {
         centered { VStack(spacing: 18) { Image(systemName: "exclamationmark.bubble").font(.system(size: 46)); Text("a quick note").font(.largeTitle.bold()); Text("youtube metadata can be wrong when scrobbling to last.fm. you can edit a song's details later.").foregroundColor(.secondary); primary("i understand") { next() }; backButton; skipButton } }
+    }
+
+    private var youtubePlayerPage: some View {
+        centered {
+            VStack(spacing: 18) {
+                Text("choose a youtube player").font(.largeTitle.bold())
+                choice("standard", "plays instantly. effects apply after the audio has been cached.") {
+                    settings.youtubebackend = .standard
+                    next()
+                }
+                choice("advanced youtube", "uses your Google YouTube Music session and downloads audio into the effects engine before playing.") {
+                    settings.youtubebackend = .advanced
+                }
+                if settings.youtubebackend == .advanced {
+                    if GoogleYouTubeAuth.shared.connected {
+                        Label("Google connected", systemImage: "checkmark.circle.fill").foregroundColor(.green)
+                        primary("continue") { next() }
+                    } else {
+                        primary("sign in with Google") { showingGoogleSignIn = true }
+                    }
+                    if let error = GoogleYouTubeAuth.shared.lastError { Text(error).font(.footnote).foregroundColor(.orange) }
+                }
+                Text("experimental: this uses YouTube's internal player service, not an official public audio API.").font(.footnote).foregroundColor(.secondary)
+                backButton; skipButton
+            }
+        }
+        .sheet(isPresented: $showingGoogleSignIn) { GoogleYouTubeSignInView() }
     }
 
     private var lastfmPage: some View {

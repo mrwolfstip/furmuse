@@ -186,9 +186,10 @@ final class ResolverManager: ObservableObject, @unchecked Sendable {
     }
 
     var youtubeavailable: Bool { YouTubeResolver().available }
+    var advancedyoutubeavailable: Bool { AdvancedYouTubeResolver().available }
 
     func resolvers() -> [AudioResolver] {
-        let yt = YouTubeResolver()
+        let yt: AudioResolver = settings.youtubebackend == .advanced ? AdvancedYouTubeResolver() : YouTubeResolver()
         let ep = EndpointResolver(base: settings.endpointurl)
         switch settings.sourceorder {
         case "endpoint": return [ep]
@@ -236,6 +237,7 @@ final class ResolverManager: ObservableObject, @unchecked Sendable {
     }
 
     func forget(_ id: String) { store(id, nil) }
+    func forgetall() { cachelock.lock(); cache.removeAll(); cachelock.unlock() }
 
     // Playback requests are disposable: a rapid skip must stop the old network lookup rather than
     // letting its coalesced task finish and race the new source. Downloads use their own request and

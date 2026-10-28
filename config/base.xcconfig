@@ -11,7 +11,7 @@ wolfified_lastfm_shared_secret =
 
 PRODUCT_NAME = furmuse
 PRODUCT_BUNDLE_IDENTIFIER = $(wolfified_bundle_id)
-MARKETING_VERSION = 0.2.1
+MARKETING_VERSION = 1.1
 CURRENT_PROJECT_VERSION = 4
 
 SDKROOT = iphoneos

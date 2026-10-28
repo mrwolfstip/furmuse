@@ -72,11 +72,31 @@ struct CoverHeader: View {
     let image: UIImage?
     let title: String
     var subtitle = ""
+    var album: AlbumGroup? = nil
 
     var body: some View {
         Color.clear
             .aspectRatio(0.82, contentMode: .fit)      // taller than square, like the player: the picture fills it edge to edge
-            .overlay(NowPlayingArt(image: image, video: nil, reducemotion: true))
+            .overlay {
+                if let album {
+                    AlbumArtworkView(group: album, size: nil, corner: 0)
+                        .mask(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: 0.55),
+                                    .init(color: .black.opacity(0.7), location: 0.75),
+                                    .init(color: .black.opacity(0.3), location: 0.9),
+                                    .init(color: .clear, location: 1)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                } else {
+                    NowPlayingArt(image: image, video: nil, reducemotion: true)
+                }
+            }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
                     Text(title)

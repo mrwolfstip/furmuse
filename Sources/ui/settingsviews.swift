@@ -20,33 +20,30 @@ struct SettingsView: View {
     @EnvironmentObject var settings: Settings
     @EnvironmentObject var auth: SpotifyAuth
     @EnvironmentObject var lastfm: LastfmClient
+    @ObservedObject private var google = GoogleYouTubeAuth.shared
     @Environment(\.colorScheme) private var system
 
-    private var lastfmvalue: String {
-        switch lastfm.state {
-        case .notconfigured: return "not set up"
-        case .signedout: return "signed out"
-        case .authenticated: return lastfm.username ?? "signed in"
-        case .expired: return "sign in again"
-        }
+    private var accountvalue: String {
+        let count = [auth.connected, google.connected, lastfm.loggedin].filter { $0 }.count
+        return count == 0 ? "none connected" : "\(count) of 3 connected"
     }
 
     var body: some View {
         List {
-            Section(header: Text("accounts")) {
-                NavigationLink(destination: SpotifySettingsView()) {
-                    SettingsRow(title: "spotify", icon: "dot.radiowaves.left.and.right", value: auth.connected ? (auth.account ?? "connected") : "not connected")
+            Section {
+                NavigationLink(destination: AccountsSettingsView()) {
+                    SettingsRow(title: "accounts", icon: "person.crop.circle", value: accountvalue)
                 }
-                NavigationLink(destination: LastfmSettingsView()) { SettingsRow(title: "last.fm", icon: "waveform.path", value: lastfmvalue) }
             }
             Section(header: Text("listening")) {
-                NavigationLink(destination: PlaybackSettingsView()) { SettingsRow(title: "speed & volume", icon: "speedometer", value: String(format: "%.2fx", settings.speed)) }
                 NavigationLink(destination: EffectsSettingsView()) { SettingsRow(title: "sound effects", icon: "slider.vertical.3", value: settings.eqon || settings.reverbon || settings.bass > 0 || settings.pitchsemis != 0 ? "on" : "off") }
                 NavigationLink(destination: LyricsSettingsView()) { SettingsRow(title: "lyrics", icon: "text.alignleft", value: settings.lyricson ? "on" : "off") }
             }
             Section(header: Text("music")) {
                 NavigationLink(destination: SourceSettingsView()) { SettingsRow(title: "where songs play from", icon: "waveform", value: settings.defaultsource) }
-                NavigationLink(destination: SpotifyPlayerSettingsView()) { SettingsRow(title: "spotify player", icon: "play.circle", value: settings.backend == .webplayback ? "standard" : "with effects") }
+                NavigationLink(destination: PlayersSettingsView()) {
+                    SettingsRow(title: "players", icon: "play.circle", value: "spotify & youtube")
+                }
                 NavigationLink(destination: DownloadsSettingsView()) { SettingsRow(title: "downloads", icon: "arrow.down.circle") }
             }
             Section(header: Text("library")) {
@@ -69,6 +66,81 @@ struct SettingsView: View {
         .themed()
         .navigationTitle("settings")
         .navigationBarTitleDisplayMode(.large)
+    }
+}
+
+struct AccountsSettingsView: View {
+    @State private var tab = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("account", selection: $tab) {
+                Text("spotify").tag(0)
+                Text("google").tag(1)
+                Text("last.fm").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            if tab == 0 { SpotifySettingsView() }
+            else if tab == 1 { GoogleAccountSettingsView() }
+            else { LastfmSettingsView() }
+        }
+        .themed().navigationTitle("accounts").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct GoogleAccountSettingsView: View {
+    @ObservedObject private var auth = GoogleYouTubeAuth.shared
+    @State private var signingIn = false
+    @State private var testing = false
+    @State private var result: String?
+
+    var body: some View {
+        Form {
+            Section(header: Text("youtube music"), footer: Text("Your YouTube session is stored securely in the iOS Keychain and is only used by Advanced YouTube.")) {
+                Label(auth.connected ? "Google account connected" : "not connected", systemImage: auth.connected ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundColor(auth.connected ? .green : .orange)
+                if auth.connected {
+                    Button(testing ? "testing…" : "test connection") {
+                        testing = true; result = nil
+                        Task {
+                            do {
+                                guard let song = await AdvancedYouTubeClient.search("Never Gonna Give You Up Rick Astley", limit: 5).first else {
+                                    throw ResolveError.unavailable("YouTube Music search returned no songs")
+                                }
+                                _ = try await AdvancedYouTubeClient.stream(videoID: song.id)
+                                result = "YouTube Music audio is available."
+                            } catch { result = (error as? ResolveError)?.text ?? error.localizedDescription }
+                            testing = false
+                        }
+                    }.disabled(testing)
+                    Button("sign out", role: .destructive) { auth.disconnect(); result = nil }
+                } else {
+                    Button("sign in with Google") { signingIn = true }
+                }
+                if let error = auth.lastError { Text(error).font(.footnote).foregroundColor(.orange) }
+                if let result { Text(result).font(.footnote).foregroundColor(.secondary) }
+            }
+        }
+        .sheet(isPresented: $signingIn) { GoogleYouTubeSignInView() }
+    }
+}
+
+struct PlayersSettingsView: View {
+    @State private var tab = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("player", selection: $tab) {
+                Text("spotify").tag(0)
+                Text("youtube").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            if tab == 0 { SpotifyPlayerSettingsView() }
+            else { YouTubePlayerSettingsView() }
+        }
+        .themed().navigationTitle("players").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -143,28 +215,6 @@ struct AppearanceSettingsView: View {
     }
 }
 
-struct PlaybackSettingsView: View {
-    @EnvironmentObject var settings: Settings
-
-    var body: some View {
-        Form {
-            Section(header: Text("speed"), footer: Text("pitch changes with speed unless pitch lock is on.")) {
-                HStack { Text("speed"); Spacer(); Text(String(format: "%.2fx", settings.speed)).monospacedDigit().foregroundColor(.secondary) }
-                Slider(value: $settings.speed, in: 0.5...2.0, step: 0.05)
-                Toggle("pitch lock", isOn: $settings.pitchlock)
-                Button("reset to 1.00x") { settings.speed = 1 }.disabled(abs(settings.speed - 1) < 0.001)
-            }
-            Section(header: Text("volume")) {
-                Slider(value: $settings.volume, in: 0...1)
-                Picker("repeat", selection: $settings.repeatmode) {
-                    Text("off").tag("off"); Text("playlist").tag("all"); Text("one song").tag("one")
-                }
-            }
-        }
-        .themed().navigationTitle("speed & volume").navigationBarTitleDisplayMode(.inline)
-    }
-}
-
 struct EffectsSettingsView: View {
     @EnvironmentObject var settings: Settings
     private let eqlabels = ["deep", "bass", "mid", "treble", "high"]
@@ -224,18 +274,13 @@ struct SourceSettingsView: View {
             Section(footer: Text("pick the right youtube video yourself when you play from search.")) {
                 Toggle("ask me to pick the video", isOn: $settings.askforsource)
             }
-            Section {
-                NavigationLink(destination: SpotifyPlayerSettingsView()) {
-                    SettingsRow(title: "spotify player", icon: "play.circle", value: settings.backend == .webplayback ? "standard" : "with effects")
-                }
-            }
             Section(header: Text("youtube lookup")) {
                 Picker("use", selection: $settings.sourceorder) {
                     Text("youtube").tag("youtube")
                     Text("my own server").tag("endpoint")
                     Text("my server, then youtube").tag("endpointfirst")
                 }
-                KeyValue(key: "youtube", value: resolver.youtubeavailable ? "ready" : "unavailable")
+                KeyValue(key: "youtube", value: settings.youtubebackend == .advanced ? (resolver.advancedyoutubeavailable ? "authenticated" : "sign in required") : (resolver.youtubeavailable ? "ready" : "unavailable"))
                 KeyValue(key: "my server", value: EndpointResolver(base: settings.endpointurl).available ? "set" : "not set")
             }
             Section(header: Text("my own server"), footer: Text("optional. a web address on your own network.")) {
@@ -249,6 +294,32 @@ struct SourceSettingsView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: settings.defaultsource)
         .themed().navigationTitle("where songs play from").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct YouTubePlayerSettingsView: View {
+    @EnvironmentObject var settings: Settings
+    @ObservedObject private var auth = GoogleYouTubeAuth.shared
+
+    var body: some View {
+        Form {
+            Section(header: Text("youtube player"), footer: Text("Advanced YouTube uses an authenticated YouTube Music player request and sends downloaded audio through furmuse's effects engine.")) {
+                Picker("mode", selection: $settings.youtubebackendraw) {
+                    Text("standard").tag(YouTubeBackend.standard.rawValue)
+                    Text("advanced youtube").tag(YouTubeBackend.advanced.rawValue)
+                }
+            }
+            if settings.youtubebackend == .advanced {
+                Section(header: Text("playback")) {
+                    Label(auth.connected ? "Google account connected" : "connect Google in accounts", systemImage: auth.connected ? "checkmark.circle.fill" : "person.crop.circle.badge.exclamationmark")
+                        .foregroundColor(auth.connected ? .green : .orange)
+                    Label("pitch, EQ and reverb enabled", systemImage: "slider.vertical.3")
+                    Text("Advanced YouTube downloads the selected M4A before first playback so it can use the shared audio graph.").font(.footnote).foregroundColor(.secondary)
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: settings.youtubebackendraw)
+        .themed().navigationTitle("youtube player").navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -612,10 +683,59 @@ struct AdvancedSettingsView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var auth: SpotifyAuth
     @State private var confirm = ""
+    @State private var checkingForUpdates = false
+    @State private var updateMessage: String?
+    @State private var updateURL: URL?
+    private let displayedVersion = "v1.1"
 
-    private var version: String {
-        let i = Bundle.main.infoDictionary
-        return "\(i?["CFBundleShortVersionString"] as? String ?? "?") (\(i?["CFBundleVersion"] as? String ?? "?"))"
+    private struct GitHubRelease: Decodable {
+        let tag_name: String
+        let html_url: String
+        let name: String?
+    }
+
+    private func versionParts(_ value: String) -> [Int] {
+        value.split { !$0.isNumber }.compactMap { Int($0) }
+    }
+
+    private func isNewer(_ remote: String, than local: String) -> Bool {
+        let a = versionParts(remote), b = versionParts(local)
+        for i in 0..<max(a.count, b.count) {
+            let av = i < a.count ? a[i] : 0
+            let bv = i < b.count ? b[i] : 0
+            if av != bv { return av > bv }
+        }
+        return false
+    }
+
+    @MainActor
+    private func checkForUpdates() async {
+        checkingForUpdates = true
+        updateMessage = nil
+        updateURL = nil
+        defer { checkingForUpdates = false }
+        do {
+            var request = URLRequest(url: URL(string: "https://api.github.com/repos/mrwolfstip/furmuse/releases/latest")!)
+            request.timeoutInterval = 15
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("furmuse/1.1", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            if http.statusCode == 404 {
+                updateMessage = "No published GitHub release was found yet."
+                return
+            }
+            guard (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+            let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+            if isNewer(release.tag_name, than: displayedVersion) {
+                updateMessage = "\(release.name ?? release.tag_name) is available."
+                updateURL = URL(string: release.html_url)
+            } else {
+                updateMessage = "Furmuse is up to date."
+            }
+        } catch {
+            updateMessage = "Couldn’t check for updates. Try again later."
+        }
     }
 
     var body: some View {
@@ -634,7 +754,19 @@ struct AdvancedSettingsView: View {
                 Button("reset settings", role: .destructive) { confirm = "settings" }
                 Button("redo setup", role: .destructive) { confirm = "setup" }
                 Button("erase everything", role: .destructive) { confirm = "everything" }
-                KeyValue(key: "version", value: version)
+            }
+            Section {
+                KeyValue(key: "app version", value: displayedVersion)
+                Button(checkingForUpdates ? "checking for updates…" : "check for updates") {
+                    Task { await checkForUpdates() }
+                }
+                .disabled(checkingForUpdates)
+                if let updateMessage {
+                    Text(updateMessage).font(.footnote).foregroundColor(.secondary)
+                }
+                if let updateURL {
+                    Link("open new release", destination: updateURL)
+                }
             }
         }
         .themed().navigationTitle("more").navigationBarTitleDisplayMode(.inline)

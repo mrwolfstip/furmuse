@@ -165,6 +165,63 @@ struct TrackArt: View {
     var body: some View { ArtworkView(url: library.shown(track).artworkurl, size: size, corner: corner) }
 }
 
+// Album artwork used by both the Library album list and album pages. A custom album video wins;
+// otherwise the matching Apple Music cover is loaded and cached. The still cover remains visible
+// while the video is loading and whenever motion is disabled.
+struct AlbumArtworkView: View {
+    let group: AlbumGroup
+    var size: CGFloat? = 48
+    var corner: CGFloat = 6
+
+    @EnvironmentObject private var library: LibraryStore
+    @EnvironmentObject private var settings: Settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var apple = AppleCovers.shared
+    @State private var appleVideo: URL?
+
+    private var stillURL: URL? {
+        group.tracks.lazy.compactMap { library.shown($0).artworkurl }.first
+    }
+
+    private var customVideo: URL? { library.albumvideourl(group.id) }
+    private var video: URL? {
+        guard !reduceMotion else { return nil }
+        return customVideo ?? appleVideo
+    }
+
+    private var lookupKey: String {
+        "\(group.id)|\(customVideo?.absoluteString ?? "")|\(settings.applecovers)|\(settings.applecoversurl)|\(apple.revision)"
+    }
+
+    var body: some View {
+        ZStack {
+            if let size {
+                ArtworkView(url: stillURL, size: size, corner: corner)
+            } else {
+                GeometryReader { proxy in
+                    ArtworkView(url: stillURL, size: max(proxy.size.width, proxy.size.height), corner: 0)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+            }
+            if let video {
+                LoopingVideoView(url: video)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        .task(id: lookupKey) {
+            appleVideo = nil
+            guard customVideo == nil, settings.applecovers else { return }
+            if let cached = apple.cached(artist: group.artist, album: group.name) {
+                appleVideo = cached.video
+                return
+            }
+            appleVideo = await apple.cover(artist: group.artist, album: group.name)?.video
+        }
+    }
+}
+
 struct PlaylistCover: View {
     let playlist: LocalPlaylist
     var size: CGFloat = 48
@@ -194,7 +251,10 @@ struct PlaylistCover: View {
 
     private func distinctart() -> [URL] {
         var seen = Set<String>(), out: [URL] = []
-        for t in library.tracks(of: playlist) {
+        // Stop after four usable covers instead of materialising every track in a
+        // potentially very large playlist each time SwiftUI evaluates this view.
+        for id in playlist.trackids {
+            guard let t = library.data.tracks[id] else { continue }
             guard let u = library.shown(t).artworkurl, seen.insert(u.absoluteString).inserted else { continue }
             out.append(u)
             if out.count == 4 { break }

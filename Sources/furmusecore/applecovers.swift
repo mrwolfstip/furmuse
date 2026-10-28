@@ -26,6 +26,7 @@ final class AppleCovers: ObservableObject, @unchecked Sendable {
     @Published private(set) var total = 0
     @Published private(set) var found = 0
     @Published private(set) var status = ""
+    @Published private(set) var revision = 0
 
     private let dir: URL
     private let lock = NSLock()
@@ -67,7 +68,7 @@ final class AppleCovers: ObservableObject, @unchecked Sendable {
     var cachecount: Int { ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".mp4") }.count }
     func clear() {
         for f in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] { try? FileManager.default.removeItem(at: dir.appendingPathComponent(f)) }
-        publish { self.found = 0; self.status = "cache cleared" }
+        publish { self.found = 0; self.status = "cache cleared"; self.revision += 1 }
     }
 
     // synchronous lock helper: NSLock.lock()/unlock() can't be called directly from async functions in Swift 6 mode
@@ -100,6 +101,7 @@ final class AppleCovers: ObservableObject, @unchecked Sendable {
             try? FileManager.default.removeItem(at: mp4(k))
             try FileManager.default.moveItem(at: tmp, to: mp4(k))
             Log.i(.artwork, "apple animated cover cached (\(Int(size.width))x\(Int(size.height)))")
+            publish { self.revision += 1 }
             return cached(artist: artist, album: album)
         } catch {
             Log.w(.artwork, "apple cover lookup failed: \((error as? HLSJoin.Failure)?.text ?? error.localizedDescription)")

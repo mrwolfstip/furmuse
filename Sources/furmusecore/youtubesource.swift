@@ -43,6 +43,10 @@ final class YouTubeSource: PlaybackSource {
         let label = [s.container, s.codec, s.bitrate.map { "\($0 / 1000)kbps" }, s.origin].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         var made: PlaybackSource?
         if YouTubeSource.decodable.contains(s.container), let f = cachedFile(s) { made = await openlocal(f, label: label) }
+        // Advanced YouTube is explicitly the graph/effects backend. Download the authenticated
+        // audio first so the very first play goes through AVAudioEngine rather than AVPlayer.
+        if made == nil, settings.youtubebackend == .advanced, YouTubeSource.decodable.contains(s.container),
+           let f = await cached(s) { made = await openlocal(f, label: label) }
         if made == nil {
             // A cache miss used to download the entire track before playback. Start AVPlayer against
             // the resolved URL now and warm the graph-compatible cache at utility priority.

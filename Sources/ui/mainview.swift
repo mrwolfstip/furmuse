@@ -96,6 +96,10 @@ struct PlayerView: View {
         .background(NowPlayingBackground(image: artimage, palette: palette, reducemotion: reducemotion))
         .accentColor(palette.accent)
         .animation(reducemotion ? nil : .easeInOut(duration: 0.35), value: shownid)
+        .task(id: engine.current?.id) {
+            guard let track = engine.current, track.id.hasPrefix(Track.ytprefix) else { return }
+            await library.refreshServiceMetadata(track, api: Services.shared.api, lastfm: Services.shared.lastfm)
+        }
         .task(id: shownid) {
             guard let t = engine.current else { artimage = nil; artcolor = nil; return }
             guard let u = library.shown(t).artworkurl else { artimage = nil; artcolor = nil; return }

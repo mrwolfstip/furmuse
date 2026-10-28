@@ -84,6 +84,11 @@ final class Services {
                 applybackend()
                 Task { @MainActor in engine.followspotifybackendchange() }
             }.store(in: &bag)
+        settings.$youtubebackendraw.removeDuplicates().dropFirst().receive(on: DispatchQueue.main)
+            .sink { _ in
+                resolver.forgetall()
+                Task { @MainActor in engine.followyoutubebackendchange() }
+            }.store(in: &bag)
         st.$state.map { $0.spotifyintegrationenabled }.removeDuplicates().dropFirst().receive(on: DispatchQueue.main)
             .sink { _ in applybackend() }.store(in: &bag)
         auth.$connected.removeDuplicates().receive(on: DispatchQueue.main)

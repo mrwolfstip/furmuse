@@ -1,13 +1,45 @@
 import SwiftUI
 
+private struct LibraryRenameTarget: Identifiable {
+    let id = UUID()
+    let title: String
+    let current: String
+    let save: (String) -> Void
+}
+
+private struct LibraryRenameSheet: View {
+    let target: LibraryRenameTarget
+    @Environment(\.dismiss) private var dismiss
+    @State private var value = ""
+
+    var body: some View {
+        NavigationView {
+            Form { TextField(target.title, text: $value).disableAutocorrection(true) }
+                .navigationTitle(target.title).navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("cancel") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("save") { target.save(value); dismiss() }
+                            .disabled(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .onAppear { value = target.current }
+        }
+        .navigationViewStyle(.stack)
+    }
+}
+
 // The library: playlists, plus every artist, album and song that is in it (played, saved, or brought in by a playlist import).
 struct LibraryView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var settings: Settings
+    @EnvironmentObject var auth: SpotifyAuth
+    @EnvironmentObject var lastfm: LastfmClient
     @State private var sub = 0              // 0 = playlists, 1 = artists, 2 = albums, 3 = all songs
     @State private var creating = false
     @State private var importkind: ImportKind?
     @State private var filter = ""
+    @State private var renaming: LibraryRenameTarget?
 
     enum ImportKind: String, Identifiable { case spotify, file, youtubeplaylist, youtubelink; var id: String { rawValue } }
 
@@ -51,6 +83,10 @@ struct LibraryView: View {
             }
         }
         .refreshable { update() }
+        .task(id: "\(auth.connected)|\(lastfm.loggedin)|\(library.data.library.count)") {
+            guard auth.connected || lastfm.loggedin else { return }
+            await library.refreshAllYouTubeServiceMetadata(api: Services.shared.api, lastfm: lastfm)
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -72,6 +108,7 @@ struct LibraryView: View {
             case .youtubelink: YouTubeSongView()
             }
         }
+        .sheet(item: $renaming) { LibraryRenameSheet(target: $0) }
     }
 
     // pulls every song that is in a playlist into the artists / albums / songs sections
@@ -125,6 +162,12 @@ struct LibraryView: View {
                     Text("\(grouped[n]?.count ?? 0)").foregroundColor(.secondary)
                 }
             }
+            .contextMenu {
+                Button {
+                    let ids = (grouped[n] ?? []).map(\.id)
+                    renaming = LibraryRenameTarget(title: "rename artist", current: n) { library.renameartist(n, trackids: ids, to: $0) }
+                } label: { Label("rename artist", systemImage: "pencil") }
+            }
         }
     }
 
@@ -139,12 +182,18 @@ struct LibraryView: View {
         ForEach(groups) { g in
             NavigationLink(destination: AlbumTracksView(key: g.id)) {
                 HStack(spacing: 12) {
-                    ArtworkView(url: g.tracks.lazy.compactMap { library.shown($0).artworkurl }.first, size: 52, corner: 8)
+                    AlbumArtworkView(group: g, size: 52, corner: 8)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(g.name).lineLimit(1)
                         Text("\(g.artist) · \(g.tracks.count) \(g.tracks.count == 1 ? "song" : "songs")").font(.caption).foregroundColor(.secondary).lineLimit(1)
                     }
                 }
+            }
+            .contextMenu {
+                Button {
+                    let ids = g.tracks.map(\.id)
+                    renaming = LibraryRenameTarget(title: "rename album", current: g.name) { library.renamealbum(g.id, trackids: ids, artist: g.artist, to: $0) }
+                } label: { Label("rename album", systemImage: "pencil") }
             }
         }
     }
@@ -173,6 +222,8 @@ struct ArtistTracksView: View {
     @State private var picking = false
     @State private var cropsource: CropSource?
     @State private var spotifytracks: [Track] = []
+    @State private var renaming: LibraryRenameTarget?
+    @Environment(\.dismiss) private var dismiss
 
     private var tracks: [Track] {
         library.allsongs.filter { library.primaryartist($0) == name }
@@ -201,6 +252,13 @@ struct ArtistTracksView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
+                    Button {
+                        let ids = tracks.map(\.id)
+                        renaming = LibraryRenameTarget(title: "rename artist", current: name) {
+                            library.renameartist(name, trackids: ids, to: $0)
+                            dismiss()
+                        }
+                    } label: { SwiftUI.Label("rename artist", systemImage: "pencil") }
                     Button { picking = true } label: { SwiftUI.Label("choose photo", systemImage: "photo") }
                     Button { Task { await findphoto() } } label: { SwiftUI.Label("find photo on spotify", systemImage: "magnifyingglass") }
                     if hascustom {
@@ -216,6 +274,7 @@ struct ArtistTracksView: View {
         .sheet(item: $cropsource) { src in
             ArtworkCropView(source: src, ondone: { rect, _ in await finishcrop(src, rect) }, oncancel: { cropsource = nil })
         }
+        .sheet(item: $renaming) { LibraryRenameSheet(target: $0) }
     }
 
     @MainActor private func findphoto() async {
@@ -240,6 +299,8 @@ struct AlbumTracksView: View {
     @EnvironmentObject var library: LibraryStore
     @State private var pickingArtwork = false
     @State private var pickingAnimatedArtwork = false
+    @State private var renaming: LibraryRenameTarget?
+    @Environment(\.dismiss) private var dismiss
 
     private var group: AlbumGroup? { library.albumgroups(library.allsongs).first { $0.id == key } }
 
@@ -250,7 +311,7 @@ struct AlbumTracksView: View {
         }
         CoverPage(url: all.lazy.compactMap { library.shown($0).artworkurl }.first) { image in
             List {
-                CoverHeader(image: image, title: g?.name ?? "album", subtitle: g.map { "\($0.artist) · \(all.count) \(all.count == 1 ? "song" : "songs")" } ?? "")
+                CoverHeader(image: image, title: g?.name ?? "album", subtitle: g.map { "\($0.artist) · \(all.count) \(all.count == 1 ? "song" : "songs")" } ?? "", album: g)
                     .coverrow()
                 Section { PlayShuffleRow(tracks: all) }.listRowBackground(Color.clear)
                 Section { ForEach(Array(all.enumerated()), id: \.element.id) { i, t in TrackRow(track: t, all: all, i: i, showsource: true) } }.listRowBackground(Color.clear)
@@ -259,6 +320,15 @@ struct AlbumTracksView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
+                    if let g {
+                        Button {
+                            let ids = g.tracks.map(\.id)
+                            renaming = LibraryRenameTarget(title: "rename album", current: g.name) {
+                                library.renamealbum(g.id, trackids: ids, artist: g.artist, to: $0)
+                                dismiss()
+                            }
+                        } label: { Label("rename album", systemImage: "pencil") }
+                    }
                     Button { pickingArtwork = true } label: { Label("choose still album cover", systemImage: "photo") }
                     Button { pickingAnimatedArtwork = true } label: { Label("choose animated album cover", systemImage: "play.rectangle") }
                     if library.data.albumart[key] != nil {
@@ -284,6 +354,7 @@ struct AlbumTracksView: View {
                 ToastCenter.shared.show("animated album cover updated")
             }
         }
+        .sheet(item: $renaming) { LibraryRenameSheet(target: $0) }
     }
 }
 

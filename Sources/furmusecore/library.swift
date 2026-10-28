@@ -10,6 +10,39 @@ struct ArtistInfo: Codable, Equatable {
     var checked: Date?
 }
 
+enum SpotifyArtwork {
+    static func bestMatch(for source: Track, among candidates: [Track]) -> Track? {
+        let wantedTitle = YouTubeMatcher.cleantitle(source.title)
+        let wantedArtist = YouTubeMatcher.norm(Track.firstname(source.artist))
+        var best: Track?
+        var bestScore = -Double.infinity
+        for candidate in candidates {
+            guard candidate.artwork != nil else { continue }
+            let title = YouTubeMatcher.cleantitle(candidate.title)
+            let artist = YouTubeMatcher.norm(candidate.artist)
+            let titleScore: Double
+            if title == wantedTitle { titleScore = 1 }
+            else if title.contains(wantedTitle) || wantedTitle.contains(title) { titleScore = 0.75 }
+            else { continue }
+            let artistScore: Double = wantedArtist.isEmpty ? 1.0 : (artist.contains(wantedArtist) || wantedArtist.contains(artist) ? 1.0 : 0.0)
+            guard artistScore > 0 else { continue }
+            var durationScore = 0.5
+            if source.duration > 0, candidate.duration > 0 {
+                let difference = abs(source.duration - candidate.duration)
+                let tolerance = YouTubeMatcher.tolerance(source.duration).loose
+                guard difference <= tolerance else { continue }
+                durationScore = max(0, 1 - difference / max(1, tolerance))
+            }
+            let titlePart: Double = titleScore * 0.55
+            let artistPart: Double = artistScore * 0.30
+            let durationPart: Double = durationScore * 0.15
+            let score: Double = titlePart + artistPart + durationPart
+            if score > bestScore { best = candidate; bestScore = score }
+        }
+        return best
+    }
+}
+
 struct LibraryData: Codable {
     var version = 3
     var tracks: [String: Track] = [:]
@@ -70,6 +103,7 @@ struct AlbumGroup: Identifiable {
 
 final class LibraryStore: ObservableObject {
     @Published private(set) var data = LibraryData()
+    private var spotifyArtworkChecks: [String: Date] = [:]
     static let supportdir: URL = {
         let u = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("wolfified", isDirectory: true)
@@ -110,6 +144,64 @@ final class LibraryStore: ObservableObject {
         if let f = o?.artwork { r.artwork = ArtworkStore.url(f).absoluteString }
         else if let key = albumkey(shown: r, original: t), let f = data.albumart[key] { r.artwork = ArtworkStore.url(f).absoluteString }
         return r
+    }
+
+    @MainActor
+    func refreshServiceMetadata(_ track: Track, api: SpotifyAPI, lastfm: LastfmClient) async {
+        guard track.id.hasPrefix(Track.ytprefix) else { return }
+        let current = data.tracks[track.id] ?? track
+        let isYouTubeThumbnail = current.artwork.flatMap { URL(string: $0)?.host?.contains("ytimg.com") } ?? false
+        let album = current.album.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let needsAlbum = album.isEmpty || album == "youtube music" || album == "youtube"
+        let needsArtwork = current.artwork == nil || isYouTubeThumbnail
+        let needsLastfmFields = lastfm.loggedin && (current.musicbrainzid == nil || current.tracknumber == nil)
+        guard needsAlbum || needsArtwork || needsLastfmFields else { return }
+        if let checked = spotifyArtworkChecks[track.id], Date().timeIntervalSince(checked) < 6 * 3600 { return }
+        spotifyArtworkChecks[track.id] = Date()
+        let query = "\(current.artist) \(current.title)".trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        let spotify = (try? await api.search(query)).flatMap { SpotifyArtwork.bestMatch(for: current, among: $0) }
+        let lastfmMetadata = lastfm.loggedin ? (try? await lastfm.metadata(artist: current.artist, title: current.title)) : nil
+        guard spotify != nil || lastfmMetadata != nil else { return }
+        mutate { data in
+            guard var saved = data.tracks[track.id] else { return }
+            // Keep the YouTube identity and playback mapping, but use Spotify's
+            // release metadata so unrelated YouTube Music results do not collapse
+            // into one placeholder album in the library.
+            if needsAlbum {
+                if let spotify {
+                    saved.album = spotify.album
+                    saved.albumartist = spotify.albumartist
+                    saved.albumid = spotify.albumid
+                } else if let lastfmMetadata, let album = lastfmMetadata.album {
+                    saved.album = album
+                    saved.albumartist = lastfmMetadata.albumartist
+                }
+            }
+            if needsArtwork, data.overrides[track.id]?.artwork == nil {
+                if let artwork = spotify?.artwork { saved.artwork = artwork }
+                else if let artwork = lastfmMetadata?.artwork { saved.artwork = artwork }
+            }
+            if saved.musicbrainzid == nil { saved.musicbrainzid = lastfmMetadata?.musicbrainzid }
+            if saved.tracknumber == nil { saved.tracknumber = lastfmMetadata?.tracknumber }
+            if saved.albumartist == nil { saved.albumartist = lastfmMetadata?.albumartist }
+            data.tracks[track.id] = saved
+        }
+        Log.i(.artwork, "upgraded \(track.id) with \(spotify != nil ? "Spotify" : "Last.fm") album metadata")
+    }
+
+    @MainActor
+    func refreshAllYouTubeServiceMetadata(api: SpotifyAPI, lastfm: LastfmClient) async {
+        let tracks = librarytracks.filter { track in
+            guard track.id.hasPrefix(Track.ytprefix) else { return false }
+            let album = track.album.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let youtubeArtwork = track.artwork.flatMap { URL(string: $0)?.host?.contains("ytimg.com") } ?? false
+            return album.isEmpty || album == "youtube music" || album == "youtube" || track.artwork == nil || youtubeArtwork
+                || (lastfm.loggedin && (track.musicbrainzid == nil || track.tracknumber == nil))
+        }
+        for track in tracks {
+            await refreshServiceMetadata(track, api: api, lastfm: lastfm)
+        }
     }
 
     private func albumkey(shown track: Track, original: Track) -> String? {
@@ -236,6 +328,43 @@ final class LibraryStore: ObservableObject {
         return order.compactMap { map[$0] }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    func renameartist(_ oldName: String, trackids: [String], to newName: String) {
+        let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, clean != oldName else { return }
+        mutate { data in
+            for id in trackids {
+                guard var track = data.tracks[id] else { continue }
+                if var credited = track.artists, !credited.isEmpty {
+                    credited[0] = clean
+                    track.artists = credited
+                    track.artist = credited.joined(separator: ", ")
+                } else {
+                    track.artist = clean
+                    track.artists = [clean]
+                }
+                if track.albumartist == oldName { track.albumartist = clean }
+                data.tracks[id] = track
+            }
+            if let info = data.artists.removeValue(forKey: oldName) { data.artists[clean] = info }
+        }
+    }
+
+    func renamealbum(_ oldKey: String, trackids: [String], artist: String, to newName: String) {
+        let clean = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let newKey = clean.lowercased() + "|" + artist.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard newKey != oldKey else { return }
+        mutate { data in
+            for id in trackids {
+                guard var track = data.tracks[id] else { continue }
+                track.album = clean
+                data.tracks[id] = track
+            }
+            if let artwork = data.albumart.removeValue(forKey: oldKey) { data.albumart[newKey] = artwork }
+            if let video = data.albumvideo.removeValue(forKey: oldKey) { data.albumvideo[newKey] = video }
+        }
+    }
+
     // a playlist's picture: its own cover, else the cover of its first song with artwork
     func playlistcoverurl(_ p: LocalPlaylist) -> URL? {
         if let f = p.coverfile { return ArtworkStore.url(f) }
@@ -316,7 +445,12 @@ final class LibraryStore: ObservableObject {
     }
 
     func remember(_ ts: [Track]) {
-        mutate { d in for t in ts where d.tracks[t.id] == nil { d.tracks[t.id] = t } }
+        // Most playlist tracks are already in the metadata store. Avoid copying and
+        // JSON-encoding the entire library on every play in that common case; it is
+        // particularly noticeable with queues containing hundreds of songs.
+        let missing = ts.filter { data.tracks[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        mutate { d in for t in missing { d.tracks[t.id] = t } }
     }
 
 
@@ -477,6 +611,44 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    // Edits the library's canonical metadata without ever changing its Spotify /
+    // YouTube identity, source mapping, downloads or playback history. Unlike a
+    // display override, these corrections are also used for album grouping,
+    // matching, Now Playing and future Last.fm submissions.
+    func edittrackmetadata(_ id: String, title: String, artist: String, album: String,
+                           albumartist: String?, tracknumber: Int?, duration: Double,
+                           musicbrainzid: String?) {
+        mutate { data in
+            guard var track = data.tracks[id] else { return }
+            let artistChanged = track.artist != artist
+            track.title = title
+            track.artist = artist
+            track.album = album
+            track.albumartist = albumartist
+            track.tracknumber = tracknumber
+            track.duration = duration
+            track.musicbrainzid = musicbrainzid
+            if artistChanged { track.artists = [artist] }
+            data.tracks[id] = track
+
+            // Canonical edits supersede old text-only overrides, but custom still
+            // and animated artwork remain attached to the song.
+            if var override = data.overrides[id] {
+                override.title = nil
+                override.artist = nil
+                override.album = nil
+                data.overrides[id] = override == Override() ? nil : override
+            }
+
+            // Keep confirmed YouTube source diagnostics in sync with corrected
+            // metadata while preserving the selected video and verification.
+            if var mapping = data.mappings[id] {
+                mapping.trackduration = duration
+                data.mappings[id] = mapping
+            }
+        }
+    }
+
     func setartwork(_ id: String, image: UIImage) {
         guard let name = ArtworkStore.save(image) else { ToastCenter.shared.show("couldn't save that image"); return }
         let old = data.overrides[id]?.artwork, oldvideo = data.overrides[id]?.video
@@ -523,6 +695,12 @@ final class LibraryStore: ObservableObject {
         let old = data.albumvideo[key]
         mutate { $0.albumvideo[key] = nil }
         ArtworkStore.remove(old)
+    }
+
+    func albumvideourl(_ key: String) -> URL? {
+        guard let file = data.albumvideo[key] else { return nil }
+        let url = ArtworkStore.url(file)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     // Animated artwork is independent of the square cover. The video is used by the player and lock screen,

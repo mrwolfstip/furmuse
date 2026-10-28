@@ -92,6 +92,11 @@ final class PlaybackEngine: ObservableObject {
         if let c = cur, let ni = queue.firstIndex(of: c) { index = ni } else { index = min(index, max(queue.count - 1, 0)) }
     }
 
+    func clearUpcoming() {
+        guard index + 1 < queue.count else { return }
+        queue.removeSubrange((index + 1)..<queue.endIndex)
+    }
+
     func move(from: IndexSet, to: Int) {
         let cur = current
         queue.move(fromOffsets: from, toOffset: to)
@@ -445,6 +450,33 @@ final class PlaybackEngine: ObservableObject {
             guard let self else { return }
             do {
                 let next = try await self.makesource(t, fresh: false)
+                guard gen == self.token else { next.stop(); return }
+                self.start(next, t, generation: gen)
+            } catch {
+                if error is CancellationError { return }
+                guard gen == self.token else { return }
+                self.swapping = nil
+                self.fail(t, error)
+            }
+        }
+    }
+
+    // Standard and Advanced YouTube resolve the same logical source through different
+    // credentials/transports. Rebuild an active YouTube source when that choice changes.
+    @MainActor
+    func followyoutubebackendchange() {
+        guard let t = current, sourcekind == .youtube, source != nil, !loading, !driven else { return }
+        let pos = livepos(), was = isplaying
+        resolver.forget(t.id)
+        teardown()
+        loading = true; sourceinfo = ""; sourcekind = nil; retried = false
+        swapping = (pos, was)
+        onstatechange?()
+        let gen = token
+        loadtask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let next = try await self.makesource(t, fresh: true)
                 guard gen == self.token else { next.stop(); return }
                 self.start(next, t, generation: gen)
             } catch {

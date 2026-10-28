@@ -27,6 +27,11 @@ final class Settings: ObservableObject {
     func cyclerepeat() { repeatmode = repeatmode == "off" ? "all" : (repeatmode == "all" ? "one" : "off") }
     @Published var defaultsource = "youtube" { didSet { put(defaultsource, "defaultsource") } }
     @Published var sourceorder = "youtube" { didSet { put(sourceorder, "sourceorder") } }
+    @Published var youtubebackendraw = YouTubeBackend.standard.rawValue { didSet { put(youtubebackendraw, "youtubebackend") } }
+    var youtubebackend: YouTubeBackend {
+        get { YouTubeBackend(rawValue: youtubebackendraw) ?? .standard }
+        set { youtubebackendraw = newValue.rawValue }
+    }
     @Published var endpointurl = "" { didSet { put(endpointurl, "endpointurl") } }
     @Published var offlineonly = false { didSet { put(offlineonly, "offlineonly") } }
     @Published var preferdownloads = true { didSet { put(preferdownloads, "preferdownloads") } }
@@ -86,6 +91,7 @@ final class Settings: ObservableObject {
         reverbmix = get("reverbmix", 25.0); repeatmode = get("repeatmode", get("repeatone", false) ? "one" : "off")
         defaultsource = get("defaultsource", "youtube")
         sourceorder = get("sourceorder", "youtube"); endpointurl = get("endpointurl", "")
+        youtubebackendraw = get("youtubebackend", YouTubeBackend.standard.rawValue)
         offlineonly = get("offlineonly", false); preferdownloads = get("preferdownloads", true)
         wifionly = get("wifionly", true); lyricson = get("lyricson", true); lyricsnet = get("lyricsnet", true)
         lyricswords = get("lyricswords", true); lyricsfake = get("lyricsfake", true); lyricsmore = get("lyricsmore", true); lyricssize = get("lyricssize", 22.0)
@@ -116,7 +122,7 @@ final class Settings: ObservableObject {
         for key in d.dictionaryRepresentation().keys where key.hasPrefix("wolfified.pref.") { d.removeObject(forKey: key) }
         thememode = "dark"; accentr = 0.08; accentg = 0.62; accentb = 0.88; speed = 1; pitchlock = false; pitchsemis = 0
         volume = 1; eqon = false; eq = [0, 0, 0, 0, 0]; bass = 0; reverbon = false; reverbpreset = 3; reverbmix = 25
-        repeatmode = "off"; defaultsource = "youtube"; sourceorder = "youtube"; endpointurl = ""; offlineonly = false; preferdownloads = true
+        repeatmode = "off"; defaultsource = "youtube"; sourceorder = "youtube"; youtubebackendraw = YouTubeBackend.standard.rawValue; endpointurl = ""; offlineonly = false; preferdownloads = true
         wifionly = true; lyricson = true; lyricsnet = true; lyricswords = true; lyricsfake = true; lyricsmore = true; spicycommunity = true; spicyapple = true; spicyspotify = true; lyricsproviderorder = ["spicy", "lrclib", "netease", "qq", "kugou"]; lyricsdisabledproviders = []; lyricssize = 22; lyricsstyle = "classic"; lyricsromanize = false; lyricsromanstyle = "replace"
         toastson = true; animatestatic = true; lockscreenlyrics = false; legacyiconunlocked = false; showanimatedplayer = true; askforsource = true; applecovers = true; applecoversurl = "https://artwork.m8tec.top"
         spotifycanvas = true; spotifycanvasurl = Settings.defaultcanvasurl; animatedcoverorder = "canvas"
