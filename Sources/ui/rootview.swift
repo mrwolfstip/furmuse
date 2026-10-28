@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import UniformTypeIdentifiers
 
 struct RootView: View {
     @EnvironmentObject var settings: Settings
@@ -196,6 +197,61 @@ struct ShareSheet: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: [url], applicationActivities: nil) }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+// file picker that hands back COPIES of the picked files (asCopy). unlike SwiftUI's .fileImporter this
+// doesn't depend on security-scoped access (which breaks when re-signed), and several can live on one screen.
+enum CopyPicker {
+    private static var live: Delegate?
+
+    private final class Delegate: NSObject, UIDocumentPickerDelegate {
+        let onPick: ([URL]) -> Void
+        let onCancel: () -> Void
+        init(onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) { self.onPick = onPick; self.onCancel = onCancel }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            CopyPicker.live = nil
+            onPick(urls)
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            CopyPicker.live = nil
+            onCancel()
+        }
+    }
+
+    private static func topController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        var top = scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? scene?.windows.first?.rootViewController
+        while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
+        return top
+    }
+
+    static func present(types: [UTType], multiple: Bool, onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
+        let show = {
+            guard let top = topController() else { onCancel(); return }
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+            picker.allowsMultipleSelection = multiple
+            let d = Delegate(onPick: onPick, onCancel: onCancel)
+            live = d   // the picker only holds its delegate weakly
+            picker.delegate = d
+            top.present(picker, animated: true)
+        }
+        // let a closing menu/sheet finish first, otherwise iOS silently drops the presentation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: show)
+    }
+}
+
+extension View {
+    func copyPicker(isPresented: Binding<Bool>, types: [UTType], multiple: Bool = false, onPick: @escaping ([URL]) -> Void) -> some View {
+        onChange(of: isPresented.wrappedValue) { on in
+            guard on else { return }
+            CopyPicker.present(types: types, multiple: multiple, onPick: { urls in
+                isPresented.wrappedValue = false
+                onPick(urls)
+            }, onCancel: { isPresented.wrappedValue = false })
+        }
+    }
 }
 
 struct KeyValue: View {
