@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CoreText
 
 final class Settings: ObservableObject {
     static let defaultcanvasurl = "https://spotify-canva.vercel.app"
@@ -9,6 +10,8 @@ final class Settings: ObservableObject {
     private func put(_ v: Any, _ key: String) { d.set(v, forKey: k(key)) }
 
     @Published var thememode = "dark" { didSet { put(thememode, "thememode") } }
+    @Published private(set) var customfontname = ""
+    @Published private(set) var customfontfile = "" { didSet { put(customfontfile, "customfontfile") } }
     @Published var accentr = 0.08 { didSet { put(accentr, "accentr") } }
     @Published var accentg = 0.62 { didSet { put(accentg, "accentg") } }
     @Published var accentb = 0.88 { didSet { put(accentb, "accentb") } }
@@ -50,6 +53,10 @@ final class Settings: ObservableObject {
     @Published var lyricsstyle = "classic" { didSet { put(lyricsstyle, "lyricsstyle") } } // classic or laser
     @Published var lyricsromanize = false { didSet { put(lyricsromanize, "lyricsromanize") } }
     @Published var lyricsromanstyle = "replace" { didSet { put(lyricsromanstyle, "lyricsromanstyle") } }   // replace, below or current
+    @Published var lyricsbackground = "automatic" { didSet { put(lyricsbackground, "lyricsbackground") } } // automatic, canvas or cover
+    @Published var lyricsbackdropblur = 34.0 { didSet { put(lyricsbackdropblur, "lyricsbackdropblur") } }
+    @Published var lyricsbackdropshade = 0.42 { didSet { put(lyricsbackdropshade, "lyricsbackdropshade") } }
+    @Published var lyricsbackdropsaturation = 1.20 { didSet { put(lyricsbackdropsaturation, "lyricsbackdropsaturation") } }
     @Published var toastson = true { didSet { put(toastson, "toastson") } }
     @Published var applecovers = true { didSet { put(applecovers, "applecovers") } }
     @Published var applecoversurl = "https://artwork.m8tec.top" { didSet { put(applecoversurl, "applecoversurl") } }
@@ -83,6 +90,8 @@ final class Settings: ObservableObject {
         for oldkey in ["wallpaperfile", "wallpaperblur", "wallpaperdark"] { d.removeObject(forKey: k(oldkey)) }
         // Existing users keep their saved choice; only an install with no theme preference starts dark.
         thememode = get("thememode", "dark")
+        customfontfile = get("customfontfile", "")
+        loadcustomfont()
         accentr = get("accentr", 0.08); accentg = get("accentg", 0.62); accentb = get("accentb", 0.88)
         speed = get("speed", 1.0); pitchlock = get("pitchlock", false); pitchsemis = get("pitchsemis", 0)
         volume = get("volume", 1.0); eqon = get("eqon", false)
@@ -100,8 +109,15 @@ final class Settings: ObservableObject {
         let savedOrder: [String] = get("lyricsproviderorder", [])
         lyricsproviderorder = savedOrder.isEmpty ? defaultProviders : savedOrder + defaultProviders.filter { !savedOrder.contains($0) }
         lyricsdisabledproviders = get("lyricsdisabledproviders", lyricsmore ? [] : ["netease", "qq", "kugou"])
-        lyricsstyle = get("lyricsstyle", "classic"); lyricsromanize = get("lyricsromanize", false)
+        let savedLyricsStyle: String = get("lyricsstyle", "classic")
+        lyricsstyle = ["classic", "laser"].contains(savedLyricsStyle) ? savedLyricsStyle : "classic"
+        lyricsromanize = get("lyricsromanize", false)
         lyricsromanstyle = get("lyricsromanstyle", "replace")
+        let savedLyricsBackground: String = get("lyricsbackground", "automatic")
+        lyricsbackground = ["automatic", "canvas", "cover"].contains(savedLyricsBackground) ? savedLyricsBackground : "automatic"
+        lyricsbackdropblur = get("lyricsbackdropblur", 34.0)
+        lyricsbackdropshade = get("lyricsbackdropshade", 0.42)
+        lyricsbackdropsaturation = get("lyricsbackdropsaturation", 1.20)
         toastson = get("toastson", true)
         animatestatic = get("animatestatic", true)
         lockscreenlyrics = get("lockscreenlyrics", false)
@@ -121,9 +137,10 @@ final class Settings: ObservableObject {
     func resetall() {
         for key in d.dictionaryRepresentation().keys where key.hasPrefix("wolfified.pref.") { d.removeObject(forKey: key) }
         thememode = "dark"; accentr = 0.08; accentg = 0.62; accentb = 0.88; speed = 1; pitchlock = false; pitchsemis = 0
+        removecustomfont()
         volume = 1; eqon = false; eq = [0, 0, 0, 0, 0]; bass = 0; reverbon = false; reverbpreset = 3; reverbmix = 25
         repeatmode = "off"; defaultsource = "youtube"; sourceorder = "youtube"; youtubebackendraw = YouTubeBackend.standard.rawValue; endpointurl = ""; offlineonly = false; preferdownloads = true
-        wifionly = true; lyricson = true; lyricsnet = true; lyricswords = true; lyricsfake = true; lyricsmore = true; spicycommunity = true; spicyapple = true; spicyspotify = true; lyricsproviderorder = ["spicy", "lrclib", "netease", "qq", "kugou"]; lyricsdisabledproviders = []; lyricssize = 22; lyricsstyle = "classic"; lyricsromanize = false; lyricsromanstyle = "replace"
+        wifionly = true; lyricson = true; lyricsnet = true; lyricswords = true; lyricsfake = true; lyricsmore = true; spicycommunity = true; spicyapple = true; spicyspotify = true; lyricsproviderorder = ["spicy", "lrclib", "netease", "qq", "kugou"]; lyricsdisabledproviders = []; lyricssize = 22; lyricsstyle = "classic"; lyricsromanize = false; lyricsromanstyle = "replace"; lyricsbackground = "automatic"; lyricsbackdropblur = 34; lyricsbackdropshade = 0.42; lyricsbackdropsaturation = 1.20
         toastson = true; animatestatic = true; lockscreenlyrics = false; legacyiconunlocked = false; showanimatedplayer = true; askforsource = true; applecovers = true; applecoversurl = "https://artwork.m8tec.top"
         spotifycanvas = true; spotifycanvasurl = Settings.defaultcanvasurl; animatedcoverorder = "canvas"
         spotifybackendraw = SpotifyBackend.webplayback.rawValue
@@ -144,6 +161,138 @@ final class Settings: ObservableObject {
     var luminance: Double { 0.299 * accentr + 0.587 * accentg + 0.114 * accentb }
 
     var accentcolor: Color { Color(.sRGB, red: accentr, green: accentg, blue: accentb, opacity: 1) }
+
+    var appfont: Font? {
+        customfontname.isEmpty ? nil : .custom(customfontname, size: 17, relativeTo: .body)
+    }
+
+    var customfontlabel: String {
+        customfontname.isEmpty ? "system default" : customfontname
+    }
+
+    func installcustomfont(from source: URL) throws {
+        let ext = source.pathExtension.lowercased()
+        guard ["ttf", "otf", "ott"].contains(ext) else { throw CustomFontError.unsupported }
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+
+        let folder = try customfontfolder()
+        let destination = folder.appendingPathComponent("app-font-\(UUID().uuidString).\(ext)")
+        let manager = FileManager.default
+        try manager.copyItem(at: source, to: destination)
+
+        do {
+            let name = try fontname(at: destination)
+            let oldURL = customfontfile.isEmpty ? nil : folder.appendingPathComponent(customfontfile)
+            if let oldURL { CTFontManagerUnregisterFontsForURL(oldURL as CFURL, .process, nil) }
+            do {
+                try registercustomfont(at: destination)
+            } catch {
+                if let oldURL { try? registercustomfont(at: oldURL) }
+                throw error
+            }
+            if let oldURL { try? manager.removeItem(at: oldURL) }
+            customfontfile = destination.lastPathComponent
+            customfontname = name
+            applycustomfonttouikit()
+        } catch {
+            try? manager.removeItem(at: destination)
+            throw error
+        }
+    }
+
+    func removecustomfont() {
+        if !customfontfile.isEmpty, let folder = try? customfontfolder() {
+            let url = folder.appendingPathComponent(customfontfile)
+            CTFontManagerUnregisterFontsForURL(url as CFURL, .process, nil)
+            try? FileManager.default.removeItem(at: url)
+        }
+        customfontfile = ""
+        customfontname = ""
+        applycustomfonttouikit()
+    }
+
+    private func loadcustomfont() {
+        guard !customfontfile.isEmpty, let folder = try? customfontfolder() else { return }
+        let url = folder.appendingPathComponent(customfontfile)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let name = try? fontname(at: url),
+              (try? registercustomfont(at: url)) != nil else {
+            customfontfile = ""
+            return
+        }
+        customfontname = name
+        applycustomfonttouikit()
+    }
+
+    private func customfontfolder() throws -> URL {
+        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let folder = base.appendingPathComponent("Furmuse/CustomFont", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    private func fontname(at url: URL) throws -> String {
+        guard let provider = CGDataProvider(url: url as CFURL),
+              let cgfont = CGFont(provider),
+              let name = cgfont.postScriptName as String?, !name.isEmpty else { throw CustomFontError.invalid }
+        return name
+    }
+
+    private func registercustomfont(at url: URL) throws {
+        var unmanagedError: Unmanaged<CFError>?
+        let registered = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &unmanagedError)
+        if !registered {
+            let error = unmanagedError?.takeRetainedValue()
+            // Registering an already active font returns false, but it is still usable.
+            if (error as Error?)?._code != CTFontManagerError.alreadyRegistered.rawValue { throw CustomFontError.invalid }
+        }
+    }
+
+    private func applycustomfonttouikit() {
+        let body = customfontname.isEmpty ? UIFont.systemFont(ofSize: 10, weight: .semibold) : UIFont(name: customfontname, size: 10)
+        let control = customfontname.isEmpty ? UIFont.systemFont(ofSize: 15, weight: .semibold) : UIFont(name: customfontname, size: 15)
+        let menu = customfontname.isEmpty ? UIFont.systemFont(ofSize: 17) : UIFont(name: customfontname, size: 17)
+        let title = customfontname.isEmpty ? UIFont.systemFont(ofSize: 17, weight: .semibold) : UIFont(name: customfontname, size: 17)
+        let large = customfontname.isEmpty ? UIFont.systemFont(ofSize: 34, weight: .bold) : UIFont(name: customfontname, size: 34)
+        if let menu {
+            // SwiftUI menus, confirmation dialogs and alerts are rendered by UIKit and do not
+            // inherit SwiftUI's font environment. Their visible titles are UILabel-backed.
+            UILabel.appearance().font = menu
+            UIBarButtonItem.appearance().setTitleTextAttributes([.font: menu], for: .normal)
+            UIBarButtonItem.appearance().setTitleTextAttributes([.font: menu], for: .highlighted)
+        }
+        if let control {
+            UISegmentedControl.appearance().setTitleTextAttributes([.font: control], for: .normal)
+            UISegmentedControl.appearance().setTitleTextAttributes([.font: control], for: .selected)
+        }
+        if let body {
+            UITabBarItem.appearance().setTitleTextAttributes([.font: body], for: .normal)
+            UITabBarItem.appearance().setTitleTextAttributes([.font: body], for: .selected)
+            let tabbar = UITabBar.appearance()
+            for appearance in [tabbar.standardAppearance, tabbar.scrollEdgeAppearance].compactMap({ $0 }) {
+                for item in [appearance.stackedLayoutAppearance, appearance.inlineLayoutAppearance, appearance.compactInlineLayoutAppearance] {
+                    item.normal.titleTextAttributes[.font] = body
+                    item.selected.titleTextAttributes[.font] = body
+                }
+            }
+        }
+        let navbar = UINavigationBar.appearance()
+        for appearance in [navbar.standardAppearance, navbar.scrollEdgeAppearance, navbar.compactAppearance].compactMap({ $0 }) {
+            if let title { appearance.titleTextAttributes[.font] = title }
+            if let large { appearance.largeTitleTextAttributes[.font] = large }
+        }
+    }
+
+    private enum CustomFontError: LocalizedError {
+        case unsupported, invalid
+        var errorDescription: String? {
+            switch self {
+            case .unsupported: return "choose a .ttf, .otf or .ott font file"
+            case .invalid: return "that file doesn't contain a font this device can use"
+            }
+        }
+    }
 
     var accentbinding: Binding<Color> {
         Binding(
@@ -221,6 +370,92 @@ final class Settings: ObservableObject {
         UITabBar.appearance().standardAppearance = tab
         UITabBar.appearance().scrollEdgeAppearance = tab
         UITabBar.appearance().isTranslucent = true
+    }
+}
+
+private struct AppFontNameKey: EnvironmentKey {
+    static let defaultValue = ""
+}
+
+extension EnvironmentValues {
+    var appFontName: String {
+        get { self[AppFontNameKey.self] }
+        set { self[AppFontNameKey.self] = newValue }
+    }
+}
+
+struct AppFontSpec {
+    private let fallback: Font
+    private let size: CGFloat
+    private let relativeTo: Font.TextStyle?
+    private var weight: Font.Weight?
+    private var italicized = false
+    private var monospaced = false
+
+    private init(_ fallback: Font, size: CGFloat, relativeTo: Font.TextStyle?, weight: Font.Weight? = nil) {
+        self.fallback = fallback
+        self.size = size
+        self.relativeTo = relativeTo
+        self.weight = weight
+    }
+
+    static let largeTitle = AppFontSpec(.largeTitle, size: 34, relativeTo: .largeTitle)
+    static let title = AppFontSpec(.title, size: 28, relativeTo: .title)
+    static let title2 = AppFontSpec(.title2, size: 22, relativeTo: .title2)
+    static let title3 = AppFontSpec(.title3, size: 20, relativeTo: .title3)
+    static let headline = AppFontSpec(.headline, size: 17, relativeTo: .headline, weight: .semibold)
+    static let body = AppFontSpec(.body, size: 17, relativeTo: .body)
+    static let callout = AppFontSpec(.callout, size: 16, relativeTo: .callout)
+    static let subheadline = AppFontSpec(.subheadline, size: 15, relativeTo: .subheadline)
+    static let footnote = AppFontSpec(.footnote, size: 13, relativeTo: .footnote)
+    static let caption = AppFontSpec(.caption, size: 12, relativeTo: .caption)
+    static let caption2 = AppFontSpec(.caption2, size: 11, relativeTo: .caption2)
+
+    static func system(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> AppFontSpec {
+        AppFontSpec(.system(size: size, weight: weight, design: design), size: size, relativeTo: nil, weight: weight)
+    }
+
+    func weight(_ value: Font.Weight) -> AppFontSpec {
+        var copy = self
+        copy.weight = value
+        return copy
+    }
+
+    func bold() -> AppFontSpec { weight(.bold) }
+
+    func italic() -> AppFontSpec {
+        var copy = self
+        copy.italicized = true
+        return copy
+    }
+
+    func monospacedDigit() -> AppFontSpec {
+        var copy = self
+        copy.monospaced = true
+        return copy
+    }
+
+    fileprivate func resolve(name: String) -> Font {
+        guard !name.isEmpty else { return fallback }
+        var font = relativeTo.map { Font.custom(name, size: size, relativeTo: $0) } ?? Font.custom(name, fixedSize: size)
+        if let weight { font = font.weight(weight) }
+        if italicized { font = font.italic() }
+        if monospaced { font = font.monospacedDigit() }
+        return font
+    }
+}
+
+private struct AppFontModifier: ViewModifier {
+    @Environment(\.appFontName) private var name
+    let spec: AppFontSpec
+    func body(content: Content) -> some View {
+        content.font(spec.resolve(name: name))
+    }
+}
+
+extension View {
+    func appFont(_ spec: AppFontSpec) -> some View {
+        modifier(AppFontModifier(spec: spec))
     }
 }
 

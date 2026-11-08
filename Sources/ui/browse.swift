@@ -67,8 +67,8 @@ struct TrackRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(s.title).foregroundColor(.primary).lineLimit(1)
                 HStack(spacing: 0) {
-                    Text(s.artist).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                    if !s.album.isEmpty { Text(" · \(s.album)").font(.caption).foregroundColor(.secondary).lineLimit(1) }
+                    Text(s.artist).appFont(.caption).foregroundColor(.secondary).lineLimit(1)
+                    if !s.album.isEmpty { Text(" · \(s.album)").appFont(.caption).foregroundColor(.secondary).lineLimit(1) }
                 }
                 if showsource { SourceBadge(track: track) }
             }
@@ -77,7 +77,7 @@ struct TrackRow: View {
             Button { playthis() } label: {
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    if downloads.has(track) { Image(systemName: "arrow.down.circle.fill").font(.caption).foregroundColor(.secondary) }
+                    if downloads.has(track) { Image(systemName: "arrow.down.circle.fill").appFont(.caption).foregroundColor(.secondary) }
                 }
                 .frame(maxWidth: .infinity, minHeight: 46)
                 .contentShape(Rectangle())
@@ -130,7 +130,7 @@ struct SourceBadge: View {
 
     var body: some View {
         let s = library.sourcesummary(track, defaultsource: settings.defaultsource)
-        Text(label(s)).font(.caption2).foregroundColor(s.kind == "youtube" && !s.confirmed ? .orange : .secondary).lineLimit(1)
+        Text(label(s)).appFont(.caption2).foregroundColor(s.kind == "youtube" && !s.confirmed ? .orange : .secondary).lineLimit(1)
     }
 
     private func label(_ s: (kind: String, detail: String, confirmed: Bool)) -> String {
@@ -424,6 +424,9 @@ struct QueueView: View {
     @EnvironmentObject var engine: PlaybackEngine
     @EnvironmentObject var library: LibraryStore
     @State private var showplayed = false
+    @State private var confirmclear = false
+    @State private var undoRemoval: (track: Track, index: Int)?
+    @Environment(\.editMode) private var editMode
 
     private var hascurrent: Bool { engine.queue.indices.contains(engine.index) }
     private var upnext: [Int] { hascurrent && engine.index + 1 < engine.queue.count ? Array((engine.index + 1)..<engine.queue.count) : [] }
@@ -434,15 +437,33 @@ struct QueueView: View {
         Group {
             if !hascurrent {
                 VStack(spacing: 10) {
-                    Image(systemName: "list.bullet").font(.system(size: 44)).foregroundColor(.secondary)
-                    Text("the queue is empty").font(.headline)
-                    Text("play something and what's coming next shows up here").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
+                    Image(systemName: "list.bullet").appFont(.system(size: 44)).foregroundColor(.secondary)
+                    Text("the queue is empty").appFont(.headline)
+                    Text("play something and what's coming next shows up here").appFont(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
                 }.padding()
             } else {
                 List {
                     Section {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("queue").appFont(.largeTitle.weight(.bold))
+                                Text("\(engine.index + 1) of \(engine.queue.count) · \(queuetime(remaining)) remaining")
+                                    .appFont(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            if !upnext.isEmpty {
+                                Button { confirmclear = true } label: {
+                                    Image(systemName: "trash").appFont(.body.weight(.semibold))
+                                        .frame(width: 42, height: 42).background(.thinMaterial, in: Circle())
+                                }.buttonStyle(.plain).accessibilityLabel("clear up next")
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .listRowBackground(Color.clear).listRowSeparator(.hidden)
+                    Section {
                         QueueRow(track: engine.queue[engine.index], playing: true, dimmed: false, isplaying: engine.isplaying) { engine.toggle() }
-                            .listRowBackground(NowPlayingCardBackground())
+                            .listRowBackground(NowPlayingCardBackground().padding(.horizontal, 2))
                             .listRowSeparator(.hidden)
                     } header: {
                         QueueHeader(title: "now playing", detail: "tap to \(engine.isplaying ? "pause" : "play")")
@@ -453,8 +474,14 @@ struct QueueView: View {
                                 QueueRow(track: engine.queue[i], playing: false, dimmed: false, isplaying: false, position: i - engine.index) { engine.jump(to: i) }
                                     .listRowBackground(Color.clear)
                                     .listRowSeparatorTint(Color.secondary.opacity(0.18))
+                                    .swipeActions(edge: .trailing) {
+                                        Button(role: .destructive) { remove(i) } label: { Label("remove", systemImage: "trash") }
+                                    }
+                                    .accessibilityHint("plays this song from this point in the queue")
                             }
-                            .onDelete { engine.remove(at: IndexSet($0.map { $0 + engine.index + 1 })) }
+                            .onDelete { offsets in
+                                for i in offsets.map({ $0 + engine.index + 1 }).sorted(by: >) { remove(i) }
+                            }
                             .onMove { from, to in engine.move(from: IndexSet(from.map { $0 + engine.index + 1 }), to: to + engine.index + 1) }
                         }
                     }
@@ -462,9 +489,9 @@ struct QueueView: View {
                         Section {
                             Button { withAnimation { showplayed.toggle() } } label: {
                                 HStack {
-                                    Label("\(earlier.count) previously played", systemImage: "clock.arrow.circlepath")
+                                    Label("\(earlier.count) previously played", systemImage: "clock.arrow.circlepath").appFont(.body)
                                     Spacer()
-                                    Image(systemName: showplayed ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold))
+                                    Image(systemName: showplayed ? "chevron.up" : "chevron.down").appFont(.caption.weight(.semibold))
                                 }
                                 .foregroundColor(.secondary)
                             }
@@ -477,27 +504,52 @@ struct QueueView: View {
                         }
                     }
                 }
-                .listStyle(.insetGrouped)
+                .listStyle(.plain)
             }
         }
         .themed()
-        .navigationTitle("queue")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            if let removed = undoRemoval {
+                HStack {
+                    Text("removed from queue").appFont(.subheadline)
+                    Spacer()
+                    Button("undo") {
+                        engine.insert(removed.track, at: removed.index)
+                        undoRemoval = nil
+                    }.appFont(.subheadline.weight(.bold))
+                }
+                .padding(.horizontal, 18).frame(height: 48)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(.horizontal).padding(.bottom, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
-                if !upnext.isEmpty {
-                    Menu {
-                        Button(role: .destructive) { engine.clearUpcoming() } label: { Label("clear up next", systemImage: "trash") }
-                    } label: { Image(systemName: "ellipsis.circle") }
+                if hascurrent && engine.queue.count > 1 {
+                    Button(editMode?.wrappedValue.isEditing == true ? "done" : "reorder") {
+                        withAnimation { editMode?.wrappedValue = editMode?.wrappedValue.isEditing == true ? .inactive : .active }
+                    }.appFont(.body.weight(.semibold))
                 }
-                if hascurrent && engine.queue.count > 1 { EditButton() }
             }
+        }
+        .confirmationDialog("clear every song in up next?", isPresented: $confirmclear, titleVisibility: .visible) {
+            Button("clear up next", role: .destructive) { engine.clearUpcoming() }
+            Button("cancel", role: .cancel) {}
         }
     }
 
     private func queuetime(_ s: Double) -> String {
         let m = Int(s) / 60
         return m >= 60 ? "\(m / 60) hr \(m % 60) min" : "\(max(m, 1)) min"
+    }
+
+    private func remove(_ i: Int) {
+        guard engine.queue.indices.contains(i), i != engine.index else { return }
+        undoRemoval = (engine.queue[i], i)
+        withAnimation { engine.remove(at: IndexSet(integer: i)) }
     }
 }
 
@@ -506,9 +558,9 @@ private struct QueueHeader: View {
     var detail = ""
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title).font(.footnote.weight(.semibold)).textCase(.uppercase).foregroundColor(.secondary)
+            Text(title).appFont(.footnote.weight(.semibold)).textCase(.uppercase).foregroundColor(.secondary)
             Spacer()
-            if !detail.isEmpty { Text(detail).font(.caption).foregroundColor(.secondary) }
+            if !detail.isEmpty { Text(detail).appFont(.caption).foregroundColor(.secondary) }
         }
         .padding(.horizontal, 4)
     }
@@ -516,10 +568,10 @@ private struct QueueHeader: View {
 
 private struct NowPlayingCardBackground: View {
     var body: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color.accentColor.opacity(0.16))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.accentColor.opacity(0.35), lineWidth: 1))
-            .padding(.vertical, 2)
+        RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.09), lineWidth: 1))
+            .padding(.vertical, 3)
     }
 }
 
@@ -537,37 +589,28 @@ private struct QueueRow: View {
         HStack(spacing: 12) {
             if let position {
                 Text("\(position)")
-                    .font(.caption.monospacedDigit())
+                    .appFont(.caption.monospacedDigit())
                     .foregroundColor(.secondary)
                     .frame(width: 22, alignment: .trailing)
             }
             TrackArt(track: track, size: playing ? 56 : 48, corner: 10)
-                .overlay(
-                    Group {
-                        if playing {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.35))
-                                Image(systemName: isplaying ? "waveform" : "pause.fill").font(.system(size: 18, weight: .semibold)).foregroundColor(.white)
-                            }
-                        }
-                    }
-                )
                 .contentShape(Rectangle())
                 .onTapGesture { onplay?() }
             VStack(alignment: .leading, spacing: 3) {
-                Text(s.title).font(.body.weight(playing ? .bold : .semibold)).foregroundColor(playing ? .accentColor : .primary).lineLimit(1)
-                Text(s.artist).font(.subheadline).foregroundColor(.secondary).lineLimit(1)
+                Text(s.title).appFont(.body.weight(playing ? .bold : .semibold)).foregroundColor(.primary).lineLimit(1)
+                Text(s.artist).appFont(.subheadline).foregroundColor(.secondary).lineLimit(1)
             }
             .contentShape(Rectangle())
             .onTapGesture { onplay?() }
             HStack(spacing: 0) {
                 Spacer(minLength: 8)
-                if track.duration > 0 { Text(fmttime(track.duration)).font(.caption).monospacedDigit().foregroundColor(.secondary) }
+                if track.duration > 0 { Text(fmttime(track.duration)).appFont(.caption).monospacedDigit().foregroundColor(.secondary) }
             }
             .frame(maxWidth: .infinity, minHeight: 44)
             .contentShape(Rectangle())
             .onTapGesture { onplay?() }
         }
+        .padding(.horizontal, 10)
         .padding(.vertical, playing ? 10 : 5)
         .opacity(dimmed ? 0.5 : 1)
         .contentShape(Rectangle())

@@ -57,6 +57,9 @@ struct RootView: View {
             }
         }
         .preferredColorScheme(settings.colorscheme)
+        .font(settings.appfont)
+        .environment(\.appFontName, settings.customfontname)
+        .id(settings.customfontname)
         .onOpenURL { url in
             guard url.scheme?.lowercased() == AppConfig.spotifyredirectscheme else { return }
             Log.i(.lifecycle, "opened from furmuse url: \(url.host ?? "unknown")")
@@ -111,7 +114,7 @@ private struct LaunchSplash: View {
             Color.black.ignoresSafeArea()
             VStack(spacing: 18) {
                 Text("furmuse")
-                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .appFont(.system(size: 38, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
 
                 TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
@@ -132,7 +135,7 @@ private struct LaunchSplash: View {
                 }
 
                 Text("loading your music one note at a time.")
-                    .font(.subheadline.italic())
+                    .appFont(.subheadline.italic())
                     .foregroundColor(.gray)
             }
             .multilineTextAlignment(.center)
@@ -154,7 +157,7 @@ private struct LoadingView: View {
             Spacer()
             HStack(spacing: 10) {
                 ProgressView().progressViewStyle(.circular)
-                Text(text).font(.subheadline.weight(.medium))
+                Text(text).appFont(.subheadline.weight(.medium))
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
             .background(.regularMaterial, in: Capsule())
@@ -174,7 +177,7 @@ struct ToastView: View {
         ZStack(alignment: .top) {
             if let t = toasts.current {
                 Text(t.text)
-                .font(.subheadline.weight(.medium))
+                .appFont(.subheadline.weight(.medium))
                 .multilineTextAlignment(.leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)

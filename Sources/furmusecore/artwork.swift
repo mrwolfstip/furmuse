@@ -142,7 +142,7 @@ struct ArtworkView: View {
             if let i = image {
                 Image(uiImage: i).resizable().scaledToFill()
             } else {
-                Image(systemName: symbol).font(.system(size: size * 0.35)).foregroundColor(.secondary)
+                Image(systemName: symbol).appFont(.system(size: size * 0.35)).foregroundColor(.secondary)
             }
         }
         .frame(width: size, height: size)

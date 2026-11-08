@@ -20,7 +20,7 @@ struct TrackSourceSection: View {
                 Text("youtube").tag(SourceKind.youtube.rawValue)
             }
             if library.preferred(track.id) == .spotify, let why = LibrespotSession.shared.blocker(auth: auth) {
-                Text("spotify isn't ready: \(why)").font(.footnote).foregroundColor(.orange)
+                Text("spotify isn't ready: \(why)").appFont(.footnote).foregroundColor(.orange)
             }
             if let n = choice?.localname { KeyValue(key: "local file", value: n) }
             Button(choice?.localaudio == nil ? "attach an audio file" : "replace audio file") { importing = true }
@@ -50,7 +50,7 @@ struct DiagnosticsView: View {
             }
             Section(header: Text("recent")) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
-                    Text(l).font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+                    Text(l).appFont(.system(size: 10, design: .monospaced)).textSelection(.enabled)
                 }
             }
         }

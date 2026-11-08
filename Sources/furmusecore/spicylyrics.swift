@@ -72,33 +72,62 @@ final class SpicyLyrics: LyricsProvider, @unchecked Sendable {
         }
     }
 
+    // Internal entry point used by deterministic fixture tests. The network wrapper is deliberately
+    // kept separate so malformed/untrusted API data can never affect playback.
+    static func parseResponse(_ data: Data) -> LyricsDoc? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let body = root["Body"] as? [String: Any] else { return nil }
+        return parse(body, source: body["source"] as? String ?? "unknown")
+    }
+
     private static func parse(_ body: [String: Any], source: String) -> LyricsDoc? {
         let type = body["Type"] as? String ?? ""
         var lines: [LyricLine] = []
+
+        // Keep one animation unit per API syllable. A trailing space is attached only when the
+        // current syllable ends a word; this preserves punctuation and split words exactly.
+        func timed(_ raw: Any?) -> (words: [LyricWord], text: String, roman: String?) {
+            guard let syllables = raw as? [[String: Any]] else { return ([], "", nil) }
+            var words: [LyricWord] = []
+            var visible = "", transliterated = ""
+            var hasRoman = false
+            for (index, syllable) in syllables.enumerated() {
+                guard let text = syllable["Text"] as? String, !text.isEmpty,
+                      let start = syllable["StartTime"] as? Double else { continue }
+                let end = max(start, syllable["EndTime"] as? Double ?? start)
+                let continues = syllable["IsPartOfWord"] as? Bool == true
+                let separator = !continues && index + 1 < syllables.count ? " " : ""
+                let roman = syllable["TransliteratedText"] as? String
+                hasRoman = hasRoman || roman != nil
+                words.append(LyricWord(time: start, end: end, text: text + separator,
+                                       roman: (roman ?? text) + separator))
+                visible += text + separator
+                transliterated += (roman ?? text) + separator
+            }
+            return (words, visible, hasRoman ? transliterated : nil)
+        }
+
         if type == "Syllable", let content = body["Content"] as? [[String: Any]] {
             for item in content {
-                guard let lead = item["Lead"] as? [String: Any], let syllables = lead["Syllables"] as? [[String: Any]] else { continue }
-                var words: [LyricWord] = [], word = "", roman = "", start: Double?, end = 0.0
-                for syllable in syllables {
-                    let text = syllable["Text"] as? String ?? ""
-                    if start == nil { start = syllable["StartTime"] as? Double }
-                    end = syllable["EndTime"] as? Double ?? end
-                    word += text; roman += syllable["TransliteratedText"] as? String ?? text
-                    if (syllable["IsPartOfWord"] as? Bool) != true {
-                        if let start, !word.isEmpty { words.append(LyricWord(time: start, end: max(end, start), text: word + " ", roman: roman + " ")) }
-                        word = ""; roman = ""; start = nil
-                    }
+                guard let lead = item["Lead"] as? [String: Any] else { continue }
+                let parsed = timed(lead["Syllables"])
+                guard !parsed.text.isEmpty else { continue }
+                let declaredStart = lead["StartTime"] as? Double ?? parsed.words.first?.time ?? 0
+                let declaredEnd = lead["EndTime"] as? Double ?? parsed.words.last?.end ?? declaredStart
+                let begin = min(declaredStart, parsed.words.first?.time ?? declaredStart)
+                let finish = max(declaredEnd, parsed.words.last?.end ?? declaredEnd)
+                let backgroundGroups = (item["Background"] as? [[String: Any]] ?? []).map { timed($0["Syllables"]) }.filter { !$0.text.isEmpty }
+                let background = backgroundGroups.map(\.text).joined(separator: " · ")
+                var backgroundWords: [LyricWord] = []
+                for (i, group) in backgroundGroups.enumerated() {
+                    if i > 0, let last = backgroundWords.indices.last { backgroundWords[last].text += " · " }
+                    backgroundWords.append(contentsOf: group.words)
                 }
-                let text = words.map(\.text).joined().trimmingCharacters(in: .whitespaces)
-                guard !text.isEmpty else { continue }
-                let begin = lead["StartTime"] as? Double ?? words.first?.time ?? 0
-                let finish = lead["EndTime"] as? Double ?? words.last?.end ?? begin
-                let backgrounds = (item["Background"] as? [[String: Any]])?.compactMap { group -> String? in
-                    let value = (group["Syllables"] as? [[String: Any]])?.compactMap { $0["Text"] as? String }.joined(separator: " ")
-                    return value?.isEmpty == false ? value : nil
-                }.joined(separator: " · ")
-                lines.append(LyricLine(time: begin, end: finish, text: text, words: words, roman: lead["TransliteratedText"] as? String,
-                                       background: backgrounds, opposite: item["OppositeAligned"] as? Bool ?? false,
+                lines.append(LyricLine(time: begin, end: finish, text: parsed.text, words: parsed.words,
+                                       roman: parsed.roman ?? lead["TransliteratedText"] as? String,
+                                       background: background.isEmpty ? nil : background,
+                                       backgroundwords: backgroundWords.isEmpty ? nil : backgroundWords,
+                                       opposite: item["OppositeAligned"] as? Bool ?? false,
                                        translation: lead["TranslatedText"] as? String))
             }
         } else if type == "Line", let content = body["Content"] as? [[String: Any]] {

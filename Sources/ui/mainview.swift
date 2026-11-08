@@ -185,13 +185,13 @@ struct PlayerView: View {
                     VStack(spacing: 14) {
                         HStack(alignment: .center, spacing: 12) {
                             VStack(alignment: .leading, spacing: 3) {
-                                AlbumLink(track: t) { Text(s.title).font(.title2.weight(.bold)).foregroundColor(fg).lineLimit(1) }
-                                ArtistLink(track: t) { Text(s.artist).font(.headline).foregroundColor(sub).lineLimit(1) }
+                                AlbumLink(track: t) { Text(s.title).appFont(.title2.weight(.bold)).foregroundColor(fg).lineLimit(1) }
+                                ArtistLink(track: t) { Text(s.artist).appFont(.headline).foregroundColor(sub).lineLimit(1) }
                             }
                             Spacer(minLength: 8)
                             Button { Haptic.tap(); withAnimation(.softspring) { library.toggleliked(t) } } label: {
                                 Image(systemName: library.isliked(t.id) ? "heart.fill" : "heart")
-                                    .font(.title2)
+                                    .appFont(.title2)
                                     .scaleEffect(library.isliked(t.id) ? 1.12 : 1)
                             }
                             .buttonStyle(PressableStyle())
@@ -235,7 +235,7 @@ struct PlayerView: View {
                                 }
                                 if let u = t.weburl { Button { UIApplication.shared.open(u) } label: { Label("open original", systemImage: "arrow.up.right.square") } }
                             } label: {
-                                Image(systemName: "ellipsis.circle.fill").font(.title2).foregroundColor(fg.opacity(0.86))
+                                Image(systemName: "ellipsis.circle.fill").appFont(.title2).foregroundColor(fg.opacity(0.86))
                             }
                         }
 
@@ -244,25 +244,25 @@ struct PlayerView: View {
                                 dragging = editing
                                 if !editing { engine.seek(scrub) }
                             }
-                            HStack { Text(fmttime(dragging ? scrub : engine.position)); Spacer(); Text(fmttime(engine.duration)) }.font(.caption).foregroundColor(sub)
+                            HStack { Text(fmttime(dragging ? scrub : engine.position)); Spacer(); Text(fmttime(engine.duration)) }.appFont(.caption).foregroundColor(sub)
                         }
                         .onReceive(engine.$position) { if !dragging { scrub = $0 } }
 
                         HStack(spacing: 56) {
-                            Button { Haptic.tap(); engine.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 28)) }.buttonStyle(PressableStyle())
+                            Button { Haptic.tap(); engine.previous() } label: { Image(systemName: "backward.fill").appFont(.system(size: 28)) }.buttonStyle(PressableStyle())
                             Button { Haptic.firm(); togglePlayback() } label: {
                                 Image(systemName: engine.isplaying ? "pause.fill" : "play.fill")
-                                    .font(.system(size: 34, weight: .semibold))
+                                    .appFont(.system(size: 34, weight: .semibold))
                                     .frame(width: 62, height: 62)
                             }
                             .buttonStyle(PressableStyle(scale: 0.9))
-                            Button { Haptic.tap(); engine.next() } label: { Image(systemName: "forward.fill").font(.system(size: 28)) }.buttonStyle(PressableStyle())
+                            Button { Haptic.tap(); engine.next() } label: { Image(systemName: "forward.fill").appFont(.system(size: 28)) }.buttonStyle(PressableStyle())
                         }
 
                         HStack(spacing: 10) {
-                            Image(systemName: "speaker.fill").font(.caption).foregroundColor(sub)
+                            Image(systemName: "speaker.fill").appFont(.caption).foregroundColor(sub)
                             SystemVolumeSlider().frame(height: 24)
-                            Image(systemName: "speaker.wave.3.fill").font(.caption).foregroundColor(sub)
+                            Image(systemName: "speaker.wave.3.fill").appFont(.caption).foregroundColor(sub)
                         }
                         .accessibilityElement(children: .contain)
 
@@ -271,13 +271,13 @@ struct PlayerView: View {
                                 Image(systemName: settings.repeatmode == "one" ? "repeat.1" : "repeat").foregroundColor(settings.repeatmode == "off" ? sub : palette.accent)
                             }
                             Spacer()
-                            NavigationLink(destination: LyricsView()) { Image(systemName: "quote.bubble").font(.title3) }
+                            NavigationLink(destination: LyricsView()) { Image(systemName: "quote.bubble").appFont(.title3) }
                             Spacer()
-                            AddToPlaylistMenu(track: t) { Image(systemName: "text.badge.plus").font(.title3) }
+                            AddToPlaylistMenu(track: t) { Image(systemName: "text.badge.plus").appFont(.title3) }
                             Spacer()
-                            NavigationLink(destination: QueueView()) { Image(systemName: "list.bullet").font(.title3) }
+                            NavigationLink(destination: QueueView()) { Image(systemName: "list.bullet").appFont(.title3) }
                             Spacer()
-                            NavigationLink(destination: SearchView()) { Image(systemName: "magnifyingglass").font(.title3) }
+                            NavigationLink(destination: SearchView()) { Image(systemName: "magnifyingglass").appFont(.title3) }
                         }
                         .foregroundColor(fg)
                         .padding(.horizontal, 20)
@@ -286,10 +286,10 @@ struct PlayerView: View {
                     Color.clear.frame(height: 10)             // the small gap between the controls and the tab bar
                 } else {
                     VStack(spacing: 10) {
-                        Image(systemName: "music.note").font(.system(size: 56)).foregroundColor(sub)
-                        Text("nothing playing").font(.title3.weight(.semibold)).foregroundColor(fg)
+                        Image(systemName: "music.note").appFont(.system(size: 56)).foregroundColor(sub)
+                        Text("nothing playing").appFont(.title3.weight(.semibold)).foregroundColor(fg)
                         Text("search for something, or pick it from your library").foregroundColor(sub).multilineTextAlignment(.center)
-                        NavigationLink(destination: SearchView()) { Label("search", systemImage: "magnifyingglass").font(.headline) }.padding(.top, 8)
+                        NavigationLink(destination: SearchView()) { Label("search", systemImage: "magnifyingglass").appFont(.headline) }.padding(.top, 8)
                     }
                     .padding(.top, 100)
                     .padding(.horizontal, 20)
@@ -317,11 +317,11 @@ private struct SpeedSheet: View {
     @EnvironmentObject var settings: Settings
     var body: some View {
         VStack(spacing: 18) {
-            Text(String(format: "%.2fx", settings.speed)).font(.system(size: 44, weight: .bold, design: .rounded)).monospacedDigit()
+            Text(String(format: "%.2fx", settings.speed)).appFont(.system(size: 44, weight: .bold, design: .rounded)).monospacedDigit()
             HStack(spacing: 10) {
-                Text("0.5x").font(.caption).foregroundColor(.secondary)
+                Text("0.5x").appFont(.caption).foregroundColor(.secondary)
                 Slider(value: $settings.speed, in: 0.5...2.0, step: 0.05)
-                Text("2x").font(.caption).foregroundColor(.secondary)
+                Text("2x").appFont(.caption).foregroundColor(.secondary)
             }
             Button("reset to 1.00x") { settings.speed = 1 }.disabled(abs(settings.speed - 1) < 0.001)
             Spacer(minLength: 0)
@@ -393,7 +393,7 @@ struct NowPlayingArt: View {
                             .frame(width: proxy.size.width, height: proxy.size.height).clipped()
                         if let v = video, !reducemotion, phase == .active { LoopingVideoView(url: v, playing: true) }
                     } else {
-                        ZStack { Color.gray.opacity(0.18); Image(systemName: "music.note").font(.system(size: 64)).foregroundColor(.secondary) }
+                        ZStack { Color.gray.opacity(0.18); Image(systemName: "music.note").appFont(.system(size: 64)).foregroundColor(.secondary) }
                     }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)

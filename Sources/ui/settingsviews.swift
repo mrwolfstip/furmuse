@@ -56,7 +56,7 @@ struct SettingsView: View {
             }
             Section {
                 Text("made sloppily to satisfy my own quirk - @mrwolfstip")
-                    .font(.caption2)
+                    .appFont(.caption2)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -118,8 +118,8 @@ struct GoogleAccountSettingsView: View {
                 } else {
                     Button("sign in with Google") { signingIn = true }
                 }
-                if let error = auth.lastError { Text(error).font(.footnote).foregroundColor(.orange) }
-                if let result { Text(result).font(.footnote).foregroundColor(.secondary) }
+                if let error = auth.lastError { Text(error).appFont(.footnote).foregroundColor(.orange) }
+                if let result { Text(result).appFont(.footnote).foregroundColor(.secondary) }
             }
         }
         .sheet(isPresented: $signingIn) { GoogleYouTubeSignInView() }
@@ -168,7 +168,7 @@ struct SpicyLyricsSettingsView: View {
                     Task { @MainActor in result = await SpicyLyrics.shared.testkey(); testing = false }
                 }.disabled(testing || !SpicyLyrics.shared.haskey)
                 if SpicyLyrics.shared.haskey { Button("remove key", role: .destructive) { SpicyLyrics.shared.removekey(); result = "removed" } }
-                if let result { Text(result).font(.footnote).foregroundColor(.secondary) }
+                if let result { Text(result).appFont(.footnote).foregroundColor(.secondary) }
             }
             Section(header: Text("accept results from"), footer: Text("the api chooses the source. if its result is turned off here, furmuse tries the next lyrics provider.")) {
                 Toggle("community syncs", isOn: $settings.spicycommunity)
@@ -182,6 +182,11 @@ struct SpicyLyricsSettingsView: View {
 
 struct AppearanceSettingsView: View {
     @EnvironmentObject var settings: Settings
+    @State private var choosingFont = false
+
+    private var fonttypes: [UTType] {
+        ["ttf", "otf", "ott"].compactMap { UTType(filenameExtension: $0) }
+    }
 
     var body: some View {
         Form {
@@ -190,9 +195,36 @@ struct AppearanceSettingsView: View {
                     Text("system").tag("system"); Text("light").tag("light"); Text("dark").tag("dark"); Text("black").tag("amoled")
                 }
             }
+            Section(header: Text("app font"), footer: Text("the font is copied into furmuse and stays on this device.")) {
+                HStack {
+                    Text("current font")
+                    Spacer()
+                    Text(settings.customfontlabel).foregroundColor(.secondary).lineLimit(1)
+                }
+                Button(settings.customfontname.isEmpty ? "choose font file" : "replace font") { choosingFont = true }
+                if !settings.customfontname.isEmpty {
+                    Button("use system font", role: .destructive) { settings.removecustomfont() }
+                }
+            }
             Section(header: Text("lock screen"), footer: Text("needs ios 26. some phone settings turn animations off.")) {
                 Toggle("animate lock screen covers", isOn: $settings.animatestatic)
                 Toggle("show current lyric as artist", isOn: $settings.lockscreenlyrics)
+            }
+            Section(header: Text("lyrics backdrop"), footer: Text("automatic uses spotify canvas when one is available, then falls back to the enlarged album cover.")) {
+                Picker("background", selection: $settings.lyricsbackground) {
+                    Text("automatic").tag("automatic")
+                    Text("spotify canvas").tag("canvas")
+                    Text("album cover").tag("cover")
+                }
+                Slider(value: $settings.lyricsbackdropblur, in: 0...70, step: 1) {
+                    Text("blur")
+                } minimumValueLabel: { Text("sharp") } maximumValueLabel: { Text("soft") }
+                Slider(value: $settings.lyricsbackdropshade, in: 0.15...0.75, step: 0.01) {
+                    Text("darkness")
+                } minimumValueLabel: { Image(systemName: "sun.max") } maximumValueLabel: { Image(systemName: "moon") }
+                Slider(value: $settings.lyricsbackdropsaturation, in: 0.5...1.8, step: 0.05) {
+                    Text("colour")
+                } minimumValueLabel: { Text("mute") } maximumValueLabel: { Text("vivid") }
             }
             if settings.legacyiconunlocked {
                 Section(header: Text("secret icon"), footer: Text("unlocked by finding the hidden phrase in your library.")) {
@@ -212,6 +244,15 @@ struct AppearanceSettingsView: View {
             }
         }
         .themed().navigationTitle("appearance").navigationBarTitleDisplayMode(.inline)
+        .fileImporter(isPresented: $choosingFont, allowedContentTypes: fonttypes, allowsMultipleSelection: false) { result in
+            do {
+                guard let url = try result.get().first else { return }
+                try settings.installcustomfont(from: url)
+                ToastCenter.shared.show("font changed to \(settings.customfontlabel)")
+            } catch {
+                ToastCenter.shared.show("couldn't use font: \(error.localizedDescription)")
+            }
+        }
     }
 }
 
@@ -268,7 +309,7 @@ struct SourceSettingsView: View {
                     Text("files & downloads").tag("local")
                 }
                 if settings.defaultsource == "spotify", let why = spotifyblocker {
-                    Text("spotify isn't ready: \(why)").font(.footnote).foregroundColor(.orange)
+                    Text("spotify isn't ready: \(why)").appFont(.footnote).foregroundColor(.orange)
                 }
             }
             Section(footer: Text("pick the right youtube video yourself when you play from search.")) {
@@ -314,7 +355,7 @@ struct YouTubePlayerSettingsView: View {
                     Label(auth.connected ? "Google account connected" : "connect Google in accounts", systemImage: auth.connected ? "checkmark.circle.fill" : "person.crop.circle.badge.exclamationmark")
                         .foregroundColor(auth.connected ? .green : .orange)
                     Label("pitch, EQ and reverb enabled", systemImage: "slider.vertical.3")
-                    Text("Advanced YouTube downloads the selected M4A before first playback so it can use the shared audio graph.").font(.footnote).foregroundColor(.secondary)
+                    Text("Advanced YouTube downloads the selected M4A before first playback so it can use the shared audio graph.").appFont(.footnote).foregroundColor(.secondary)
                 }
             }
         }
@@ -336,7 +377,7 @@ struct SpotifyPlayerSettingsView: View {
             Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill").foregroundColor(ok ? .green : .orange)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                if !ok { Text(fix).font(.footnote).foregroundColor(.secondary) }
+                if !ok { Text(fix).appFont(.footnote).foregroundColor(.secondary) }
             }
         }
     }
@@ -364,14 +405,14 @@ struct SpotifyPlayerSettingsView: View {
                 row("included in this app", librespot.available, "not included in this build")
                 row("spotify connected", auth.connected, "connect it in settings → spotify")
                 row("signed in for effects", lauth.connected, "tap \"sign in\" below")
-                if let e = lauth.lasterror { Text(e).font(.footnote).foregroundColor(.orange) }
+                if let e = lauth.lasterror { Text(e).appFont(.footnote).foregroundColor(.orange) }
                 if lauth.connected {
                     Button("sign out", role: .destructive) { lauth.disconnect(); LibrespotSession.shared.shutdown() }
                 } else {
                     Button(lauth.busy ? "signing in…" : "sign in") { lauth.connect() }.disabled(lauth.busy)
                 }
                 row("ready", librespot.status == "connected", "tap \"test\" below")
-                if let e = librespot.lasterror { Text(e).font(.footnote).foregroundColor(.orange) }
+                if let e = librespot.lasterror { Text(e).appFont(.footnote).foregroundColor(.orange) }
                 Button(testing ? "testing…" : "test") { runtest() }
                     .disabled(testing || LibrespotSession.shared.blocker(auth: auth) != nil)
                 Button(testing ? "reconnecting…" : "reconnect") {
@@ -382,7 +423,7 @@ struct SpotifyPlayerSettingsView: View {
                         testing = false
                     }
                 }.disabled(testing || LibrespotSession.shared.blocker(auth: auth) != nil)
-                if let r = testresult { Text(r).font(.footnote).foregroundColor(.secondary) }
+                if let r = testresult { Text(r).appFont(.footnote).foregroundColor(.secondary) }
             }
             }
         }
@@ -402,7 +443,7 @@ struct SpotifySettingsView: View {
                 KeyValue(key: "status", value: auth.connected ? (auth.verified ? "connected" : "not checked yet") : "not connected")
                 if auth.connected, auth.scopesok == false {
                     Text("please disconnect and connect again once.")
-                        .font(.footnote).foregroundColor(.orange)
+                        .appFont(.footnote).foregroundColor(.orange)
                 }
                 if let n = auth.account { KeyValue(key: "account", value: n) }
                 if auth.connected {
@@ -411,8 +452,8 @@ struct SpotifySettingsView: View {
                 } else {
                     Button(auth.busy ? "waiting…" : "connect spotify") { auth.connect() }.disabled(auth.busy || !store.config.spotifyconfigured)
                 }
-                if let e = auth.lasterror { Text(e).font(.footnote).foregroundColor(.red) }
-                if !store.config.spotifyconfigured { Text("add your client id above first").font(.footnote).foregroundColor(.orange) }
+                if let e = auth.lasterror { Text(e).appFont(.footnote).foregroundColor(.red) }
+                if !store.config.spotifyconfigured { Text("add your client id above first").appFont(.footnote).foregroundColor(.orange) }
             }
             Section(footer: Text("needs spotify premium.")) {
                 Link("open spotify", destination: URL(string: "https://open.spotify.com")!)
@@ -461,7 +502,7 @@ struct LastfmSettingsView: View {
                 KeyValue(key: "status", value: statustext)
                 switch lastfm.state {
                 case .notconfigured:
-                    Text("add your keys above first").font(.footnote).foregroundColor(.orange)
+                    Text("add your keys above first").appFont(.footnote).foregroundColor(.orange)
                 case .signedout:
                     Button(lastfm.busy ? "waiting…" : "sign in") { lastfm.authenticate() }.disabled(lastfm.busy)
                 case .authenticated:
@@ -469,11 +510,11 @@ struct LastfmSettingsView: View {
                     Button("check connection") { Task { await lastfm.validate() } }
                     Button("sign out", role: .destructive) { lastfm.logout() }
                 case .expired:
-                    Text("sign in again. plays are saved until then.").font(.footnote).foregroundColor(.orange)
+                    Text("sign in again. plays are saved until then.").appFont(.footnote).foregroundColor(.orange)
                     Button(lastfm.busy ? "waiting…" : "sign in again") { lastfm.authenticate() }.disabled(lastfm.busy)
                     Button("sign out", role: .destructive) { lastfm.logout() }
                 }
-                if let e = lastfm.lasterror { Text(e).font(.footnote).foregroundColor(.red) }
+                if let e = lastfm.lasterror { Text(e).appFont(.footnote).foregroundColor(.red) }
             }
             Section(header: Text("send plays from"), footer: Text("last.fm gets the original song info, even if you renamed it.")) {
                 Toggle("spotify", isOn: Binding(
@@ -489,13 +530,13 @@ struct LastfmSettingsView: View {
             }
             if store.state.lastfmlinkedtospotify != false && store.state.lastfmscrobblespotify {
                 Section(header: Text("double counting")) {
-                    Text("last.fm may count your spotify plays twice.").font(.footnote).foregroundColor(.orange)
+                    Text("last.fm may count your spotify plays twice.").appFont(.footnote).foregroundColor(.orange)
                     if store.doublescrobblepending {
-                        Text("spotify plays aren't sent until you choose.").font(.footnote).foregroundColor(.secondary)
+                        Text("spotify plays aren't sent until you choose.").appFont(.footnote).foregroundColor(.secondary)
                         Button("keep both on") { store.confirmdoublescrobble() }
                         Button("turn off spotify plays here") { store.setscrobble(.spotify, false) }
                     } else {
-                        Text("you chose to keep both on.").font(.footnote).foregroundColor(.secondary)
+                        Text("you chose to keep both on.").appFont(.footnote).foregroundColor(.secondary)
                     }
                 }
             }
@@ -531,7 +572,7 @@ struct DownloadsSettingsView: View {
                     let d = library.data.downloads[id]!
                     VStack(alignment: .leading) {
                         Text(library.data.tracks[id].map { library.shown($0).title } ?? d.title ?? id)
-                        Text(ByteCountFormatter.string(fromByteCount: d.bytes, countStyle: .file)).font(.caption).foregroundColor(.secondary)
+                        Text(ByteCountFormatter.string(fromByteCount: d.bytes, countStyle: .file)).appFont(.caption).foregroundColor(.secondary)
                     }
                 }
                 .onDelete { offsets in offsets.map { ids[$0] }.forEach { downloads.remove($0) } }
@@ -589,7 +630,7 @@ struct LyricsSourcesSettingsView: View {
                     Toggle(isOn: enabled(id)) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(LyricsProviders.labels[id] ?? id)
-                            if id == "spicy", !SpicyLyrics.shared.haskey { Text("add a key").font(.caption).foregroundColor(.secondary) }
+                            if id == "spicy", !SpicyLyrics.shared.haskey { Text("add a key").appFont(.caption).foregroundColor(.secondary) }
                         }
                     }
                 }
@@ -762,7 +803,7 @@ struct AdvancedSettingsView: View {
                 }
                 .disabled(checkingForUpdates)
                 if let updateMessage {
-                    Text(updateMessage).font(.footnote).foregroundColor(.secondary)
+                    Text(updateMessage).appFont(.footnote).foregroundColor(.secondary)
                 }
                 if let updateURL {
                     Link("open new release", destination: updateURL)
@@ -825,7 +866,7 @@ struct AppleCoversSettingsView: View {
                 }
                 KeyValue(key: "saved", value: "\(SpotifyCanvas.shared.cachecount)")
                 if !SpotifyCanvas.shared.status.isEmpty {
-                    Text(SpotifyCanvas.shared.status).font(.footnote).foregroundColor(.secondary)
+                    Text(SpotifyCanvas.shared.status).appFont(.footnote).foregroundColor(.secondary)
                 }
                 Button("test with current song") {
                     guard let track = engine.current, track.isspotify else {
@@ -843,14 +884,14 @@ struct AppleCoversSettingsView: View {
             Section(header: Text("get covers ready"), footer: Text("looks up covers for your whole library, so they're ready before you play.")) {
                 if apple.running {
                     ProgressView(value: Double(apple.done), total: Double(max(apple.total, 1)))
-                    Text("\(apple.done) of \(apple.total) · \(apple.found) found").font(.footnote).foregroundColor(.secondary)
+                    Text("\(apple.done) of \(apple.total) · \(apple.found) found").appFont(.footnote).foregroundColor(.secondary)
                     Button("stop", role: .destructive) { apple.stop() }
                 } else {
                     Button("get covers for my library (\(tracks.count) songs)") {
                         let list = tracks, use = settings.applecovers, lib = library
                         Task { await apple.precache(tracks: list, useapple: use, library: lib) }
                     }.disabled(tracks.isEmpty)
-                    if !apple.status.isEmpty { Text(apple.status).font(.footnote).foregroundColor(.secondary) }
+                    if !apple.status.isEmpty { Text(apple.status).appFont(.footnote).foregroundColor(.secondary) }
                 }
                 KeyValue(key: "saved", value: "\(apple.cachecount)")
                 Button("clear apple covers", role: .destructive) { apple.clear() }
@@ -875,7 +916,7 @@ struct WebPlayerStatusSection: View {
             Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill").foregroundColor(ok ? .green : .orange)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                if !ok { Text(fix).font(.footnote).foregroundColor(.secondary) }
+                if !ok { Text(fix).appFont(.footnote).foregroundColor(.secondary) }
             }
         }
     }
@@ -888,10 +929,10 @@ struct WebPlayerStatusSection: View {
             row("player ready", web.phase == .ready, web.lasterror ?? "starts by itself")
             if web.phase == .ready { KeyValue(key: "speaker name", value: WebPlaybackSession.devicename) }
             if web.activationneeded {
-                Text("tap the bar at the top of the screen once to start.").font(.footnote).foregroundColor(.orange)
+                Text("tap the bar at the top of the screen once to start.").appFont(.footnote).foregroundColor(.orange)
             }
             if web.volumecontrol == false {
-                Text("use your phone's volume buttons for spotify songs.").font(.footnote).foregroundColor(.secondary)
+                Text("use your phone's volume buttons for spotify songs.").appFont(.footnote).foregroundColor(.secondary)
             }
             Button("restart player") { web.restart(); note = nil }
             Button("use \(WebPlaybackSession.devicename) as my speaker") {
@@ -900,7 +941,7 @@ struct WebPlayerStatusSection: View {
                     catch { note = (error as? SourceError)?.text ?? error.localizedDescription }
                 }
             }.disabled(web.phase != .ready)
-            if let n = note { Text(n).font(.footnote).foregroundColor(.secondary) }
+            if let n = note { Text(n).appFont(.footnote).foregroundColor(.secondary) }
         }
     }
 }

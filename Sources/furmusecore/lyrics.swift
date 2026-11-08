@@ -9,6 +9,10 @@ struct LyricLine: Codable {
     var backgroundwords: [LyricWord]? = nil
     var opposite = false
     var translation: String? = nil
+    var agent: String? = nil                 // TTML ttm:agent id
+    var agentName: String? = nil             // resolved ttm:agent display name
+    var style: String? = nil                 // TTML style reference, retained for renderers
+    var region: String? = nil                // TTML region reference
 }
 struct LyricsCredit: Codable, Equatable {
     var name: String
@@ -23,11 +27,21 @@ struct LyricsDoc: Codable {
 }
 
 enum LyricsParser {
-    static func clock(_ s: String) -> Double? {
+    static func clock(_ s: String, frameRate: Double = 30) -> Double? {
         var t = s.trimmingCharacters(in: .whitespaces)
-        if t.hasSuffix("s") { t.removeLast(); return Double(t) }
-        let parts = t.split(separator: ":").map { Double($0) }
-        guard !parts.isEmpty, !parts.contains(where: { $0 == nil }) else { return nil }
+        for (suffix, scale) in [("ms", 0.001), ("h", 3600.0), ("m", 60.0), ("s", 1.0)] where t.hasSuffix(suffix) {
+            t.removeLast(suffix.count)
+            return Double(t).map { $0 * scale }
+        }
+        if t.hasSuffix("f") { t.removeLast(); return Double(t).map { $0 / frameRate } }
+        let raw = t.split(separator: ":", omittingEmptySubsequences: false)
+        guard raw.count >= 2, raw.count <= 4 else { return Double(t) }
+        if raw.count == 4 {
+            guard let h = Double(raw[0]), let m = Double(raw[1]), let s = Double(raw[2]), let f = Double(raw[3]) else { return nil }
+            return h * 3600 + m * 60 + s + f / frameRate
+        }
+        let parts = raw.map { Double($0) }
+        guard !parts.contains(where: { $0 == nil }) else { return nil }
         return parts.compactMap { $0 }.reduce(0) { $0 * 60 + $1 }
     }
 
@@ -115,7 +129,14 @@ enum LyricsParser {
     }
 
     static func ttml(_ data: Data, source: String) -> LyricsDoc? {
-        let p = XMLParser(data: data)
+        // XMLParser rejects an otherwise valid document when a file export leaves whitespace
+        // before its XML declaration. Trim only that leading transport noise, never lyric text.
+        let input: Data
+        if var text = String(data: data, encoding: .utf8) {
+            text = text.replacingOccurrences(of: "^\\s*(?=<\\?xml)", with: "", options: .regularExpression)
+            input = Data(text.utf8)
+        } else { input = data }
+        let p = XMLParser(data: input)
         let d = TTMLDelegate()
         p.delegate = d
         guard p.parse(), !d.lines.isEmpty else { return nil }
@@ -128,88 +149,136 @@ enum LyricsParser {
 
     private final class TTMLDelegate: NSObject, XMLParserDelegate {
         var lines: [LyricLine] = []
+        private struct Agent { var name = "" }
+        private struct Span {
+            var start: Double?
+            var end: Double?
+            var role: String?
+            var text = ""
+            var hasChild = false
+            var background: Bool
+        }
         private var cur: LyricLine?
-        private var spanstart: Double?
-        private var spanend = 0.0
-        private var buf = ""
-        private var inspan = false
-        private var depth = 0               // span nesting depth
-        private var bgdepth: Int?           // depth of the open ttm:role="x-bg" span, when inside one
-        private var bgbuf = ""
+        private var spans: [Span] = []
+        private var backgroundText = ""
         private var bgwords: [LyricWord] = []
+        private var agents: [String: Agent] = [:]
+        private var currentAgentID: String?
+        private var agentNameBuffer = ""
         private var primaryagent: String?
+        private var frameRate = 30.0
 
         private func local(_ n: String) -> String { n.components(separatedBy: ":").last ?? n }
+        private func attr(_ name: String, _ attributes: [String: String]) -> String? {
+            attributes.first(where: { local($0.key) == name })?.value
+        }
+        private func time(_ value: String?) -> Double? { value.flatMap { LyricsParser.clock($0, frameRate: frameRate) } }
+        private func normalized(_ text: String) -> String {
+            text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Timed spans are animation anchors, not the source of truth for visible text. TTML
+        // commonly leaves punctuation, spaces, or even whole words outside timed spans. Map
+        // the anchors back onto the complete paragraph so highlighting can never drop text.
+        private func complete(_ words: [LyricWord], with fullText: String) -> [LyricWord] {
+            guard !words.isEmpty, !fullText.isEmpty else { return words }
+            let source = fullText as NSString
+            var cursor = 0
+            var ranges: [NSRange] = []
+            for word in words {
+                let token = normalized(word.text)
+                guard !token.isEmpty, cursor <= source.length else { return [] }
+                let range = source.range(of: token, options: [], range: NSRange(location: cursor, length: source.length - cursor))
+                guard range.location != NSNotFound else { return [] }
+                ranges.append(range)
+                cursor = range.location + range.length
+            }
+            return words.indices.map { index in
+                var word = words[index]
+                let start = index == 0 ? 0 : ranges[index].location
+                let end = index + 1 < ranges.count ? ranges[index + 1].location : source.length
+                word.text = source.substring(with: NSRange(location: start, length: max(0, end - start)))
+                return word
+            }
+        }
 
         func parser(_ parser: XMLParser, didStartElement rawname: String, namespaceURI: String?, qualifiedName: String?, attributes a: [String: String] = [:]) {
             let name = local(rawname)
-            if name == "p" {
-                let t = a["begin"].flatMap { LyricsParser.clock($0) } ?? 0
-                let e = a["end"].flatMap { LyricsParser.clock($0) } ?? t
-                let agent = a.first(where: { local($0.key) == "agent" })?.value
+            if name == "tt" {
+                frameRate = Double(attr("frameRate", a) ?? "") ?? 30
+            } else if name == "agent" {
+                currentAgentID = attr("id", a)
+                agentNameBuffer = ""
+            } else if name == "name", currentAgentID != nil {
+                agentNameBuffer = ""
+            } else if name == "p" {
+                let t = time(attr("begin", a)) ?? 0
+                let e = time(attr("end", a)) ?? time(attr("dur", a)).map { t + $0 } ?? t
+                let agent = attr("agent", a)
                 if primaryagent == nil, let agent, !agent.isEmpty { primaryagent = agent }
-                cur = LyricLine(time: t, end: e, text: "", words: [], opposite: agent != nil && agent != primaryagent)
-                depth = 0; bgdepth = nil; inspan = false
+                cur = LyricLine(time: t, end: e, text: "", words: [], opposite: agent != nil && agent != primaryagent,
+                                agent: agent, agentName: agent.flatMap { agents[$0]?.name }, style: attr("style", a), region: attr("region", a))
+                spans = []; backgroundText = ""; bgwords = []
             } else if name == "span", cur != nil {
-                depth += 1
-                let role = a.first(where: { local($0.key) == "role" })?.value
-                if role == "x-bg", bgdepth == nil {
-                    bgdepth = depth
-                    bgbuf = ""
-                    bgwords = []
-                } else {
-                    inspan = true
-                    buf = ""
-                    spanstart = a["begin"].flatMap { LyricsParser.clock($0) }
-                    spanend = a["end"].flatMap { LyricsParser.clock($0) } ?? 0
-                }
+                if !spans.isEmpty { spans[spans.count - 1].hasChild = true }
+                let role = attr("role", a)
+                let background = role == "x-bg" || spans.last?.background == true
+                let start = time(attr("begin", a)) ?? spans.last?.start ?? cur?.time
+                let end = time(attr("end", a))
+                    ?? time(attr("dur", a)).flatMap { duration in start.map { $0 + duration } }
+                    ?? spans.last?.end ?? cur?.end
+                spans.append(Span(start: start, end: end, role: role, background: background))
             } else if name == "br" {
-                if bgdepth != nil { bgbuf += " " } else { cur?.text += " " }
+                if spans.last?.background == true { backgroundText += " " } else { cur?.text += " " }
             }
         }
 
         func parser(_ parser: XMLParser, foundCharacters s: String) {
-            if inspan { buf += s }
-            else if bgdepth != nil { bgbuf += s }
-            else if cur != nil {
+            if currentAgentID != nil, cur == nil { agentNameBuffer += s; return }
+            guard cur != nil else { return }
+            if !spans.isEmpty {
+                for i in spans.indices { spans[i].text += s }
+                if spans.last?.background == true { backgroundText += s } else { cur?.text += s }
+            } else {
                 cur?.text += s
-                // apple ttml puts the space between words outside the spans; keep it on the previous word so words join correctly
-                if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !s.isEmpty, let n = cur?.words.count, n > 0,
-                   cur?.words[n - 1].text.last?.isWhitespace == false { cur?.words[n - 1].text += " " }
             }
         }
 
         func parser(_ parser: XMLParser, didEndElement rawname: String, namespaceURI: String?, qualifiedName: String?) {
             let name = local(rawname)
-            if name == "span", cur != nil {
-                if inspan {
-                    inspan = false
-                    if bgdepth != nil {
-                        bgbuf += buf
-                        if let s = spanstart, !buf.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            bgwords.append(LyricWord(time: s, end: max(spanend, s), text: buf))
-                        }
-                    }
-                    else {
-                        cur?.text += buf
-                        if let s = spanstart { cur?.words.append(LyricWord(time: s, end: max(spanend, s), text: buf)) }
-                    }
-                } else if bgdepth == depth {
-                    var t = bgbuf.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if t.hasPrefix("("), t.hasSuffix(")") { t = String(t.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces) }
-                    if !t.isEmpty { cur?.background = t; cur?.backgroundwords = bgwords.isEmpty ? nil : bgwords }
-                    bgdepth = nil
+            if name == "agent", let id = currentAgentID {
+                agents[id] = Agent(name: normalized(agentNameBuffer))
+                currentAgentID = nil; agentNameBuffer = ""
+            } else if name == "span", cur != nil, let span = spans.popLast() {
+                let text = normalized(span.text)
+                // A timed leaf is one independently highlighted unit. Parent spans still
+                // contribute visible text, but do not duplicate all of their child words.
+                if !span.hasChild, !text.isEmpty, let start = span.start {
+                    let end = max(span.end ?? start, start)
+                    let word = LyricWord(time: start, end: end, text: text + " ")
+                    if span.background { bgwords.append(word) } else { cur?.words.append(word) }
                 }
-                depth = max(0, depth - 1)
             } else if name == "p", var l = cur {
-                l.text = l.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                l.text = normalized(l.text)
+                var bg = normalized(backgroundText)
+                if bg.hasPrefix("("), bg.hasSuffix(")") { bg = normalized(String(bg.dropFirst().dropLast())) }
+                l.words = complete(l.words, with: l.text)
+                if !bg.isEmpty {
+                    l.background = bg
+                    let completeBackground = complete(bgwords, with: bg)
+                    l.backgroundwords = completeBackground.isEmpty ? nil : completeBackground
+                }
+                // Keep the complete paragraph interval. Child timing can refine words but
+                // must never shorten a line or make it yield to the next paragraph.
                 if !l.text.isEmpty { lines.append(l) }
-                cur = nil
+                cur = nil; spans = []
             }
         }
     }
 }
 
+#if !LYRICS_PARSER_STANDALONE
 final class LyricsStore: ObservableObject {
     @Published private(set) var doc: LyricsDoc?
     @Published private(set) var status = ""
@@ -496,3 +565,4 @@ enum LyricsProviders {
         return text
     }
 }
+#endif

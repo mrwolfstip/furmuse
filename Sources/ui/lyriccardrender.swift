@@ -29,6 +29,7 @@ struct LyricCardSpec {
     var shade: CGFloat            // black overlay on top of a picture, 0...1
     var lyricsize: CGFloat
     var brand: Bool
+    var fontname = ""             // registered custom app font; empty keeps the system font
     var cover: UIImage?           // album cover: the backdrop for .cover and the small thumbnail in the header
     var artistphoto: UIImage?     // backdrop for .artist
 
@@ -81,8 +82,8 @@ enum LyricCardRenderer {
                 cg.restoreGState()
             }
             let headerX: CGFloat = s.cover == nil ? margin : 226
-            draw(s.title, in: CGRect(x: headerX, y: 78, width: 1080 - headerX - margin, height: 58), font: .systemFont(ofSize: 36, weight: .bold), color: fg)
-            draw(s.artist, in: CGRect(x: headerX, y: 137, width: 1080 - headerX - margin, height: 44), font: .systemFont(ofSize: 29, weight: .medium), color: fg.withAlphaComponent(0.74))
+            draw(s.title, in: CGRect(x: headerX, y: 78, width: 1080 - headerX - margin, height: 58), font: font(s, size: 36, weight: .bold), color: fg)
+            draw(s.artist, in: CGRect(x: headerX, y: 137, width: 1080 - headerX - margin, height: 44), font: font(s, size: 29, weight: .medium), color: fg.withAlphaComponent(0.74))
 
             var fontSize: CGFloat = min(s.lyricsize, s.lines.count >= 4 ? 56 : 76)
             let lyricRect = CGRect(x: margin, y: 260, width: 1080 - margin * 2, height: 650)
@@ -93,7 +94,7 @@ enum LyricCardRenderer {
                 fontSize -= 2
             }
             block(s, size: fontSize, color: fg).draw(with: lyricRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-            if s.brand { draw("furmuse", in: CGRect(x: margin, y: 970, width: 400, height: 50), font: .systemFont(ofSize: 28, weight: .semibold), color: fg.withAlphaComponent(0.76)) }
+            if s.brand { draw("furmuse", in: CGRect(x: margin, y: 970, width: 400, height: 50), font: font(s, size: 28, weight: .semibold), color: fg.withAlphaComponent(0.76)) }
         }
     }
 
@@ -111,8 +112,8 @@ enum LyricCardRenderer {
             let p = paragraph(lineSpacing: 8); p.paragraphSpacing = after
             out.append(NSAttributedString(string: text + (last ? "" : "\n"), attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p]))
         }
-        let main = UIFont.systemFont(ofSize: size, weight: .bold)
-        let sub = UIFont.systemFont(ofSize: size * 0.58, weight: .semibold)
+        let main = font(s, size: size, weight: .bold)
+        let sub = font(s, size: size * 0.58, weight: .semibold)
         for (i, line) in s.lines.enumerated() {
             let last = i == s.lines.count - 1
             let r = roman(i)
@@ -126,6 +127,15 @@ enum LyricCardRenderer {
             }
         }
         return out
+    }
+
+    private static func font(_ s: LyricCardSpec, size: CGFloat, weight: UIFont.Weight) -> UIFont {
+        guard !s.fontname.isEmpty, let base = UIFont(name: s.fontname, size: size) else {
+            return .systemFont(ofSize: size, weight: weight)
+        }
+        let traits: UIFontDescriptor.SymbolicTraits = weight.rawValue >= UIFont.Weight.semibold.rawValue ? .traitBold : []
+        guard !traits.isEmpty, let descriptor = base.fontDescriptor.withSymbolicTraits(traits) else { return base }
+        return UIFont(descriptor: descriptor, size: size)
     }
 
     // the picture, scaled to fill the card and then gaussian blurred. the edges are clamped before blurring, so the blur

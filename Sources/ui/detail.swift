@@ -80,7 +80,7 @@ struct MappingView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(c.title).foregroundColor(.primary).lineLimit(2)
                             Text("\(c.channel) · \(dur(c.duration))\((r.score ?? 0) >= YouTubeMatcher.threshold ? " · good match" : " · \(r.reason.isEmpty ? "weak match" : r.reason)")")
-                                .font(.caption).foregroundColor(.secondary)
+                                .appFont(.caption).foregroundColor(.secondary)
                         }
                     }
                 }
@@ -158,7 +158,7 @@ struct OverrideView: View {
                 Button { pickingvideo = true } label: { Label("choose animated cover", systemImage: "play.rectangle") }
                 if library.data.overrides[track.id]?.video != nil {
                     Text("animated artwork is used in the player and on supported lock screens. your original square cover stays unchanged and is used with reduced motion.")
-                        .font(.footnote).foregroundColor(.secondary)
+                        .appFont(.footnote).foregroundColor(.secondary)
                 }
                 if library.data.overrides[track.id]?.artwork != nil || library.data.overrides[track.id]?.video != nil {
                     Button(role: .destructive) { library.clearartwork(track.id) } label: {
@@ -193,7 +193,7 @@ struct OverrideView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("save & close", action: saveandclose).font(.body.weight(.semibold))
+                Button("save & close", action: saveandclose).appFont(.body.weight(.semibold))
             }
         }
         .onAppear {
@@ -254,50 +254,56 @@ struct LyricsView: View {
     @EnvironmentObject var lyrics: LyricsStore
     @EnvironmentObject var settings: Settings
     @EnvironmentObject var library: LibraryStore
+    @Environment(\.dismiss) private var dismiss
     @State private var importing = false
     @State private var pasting = false
     @State private var syncing = false
-    @State private var active = -1
+    @State private var active: Set<Int> = []
+    @State private var focused = -1
+    @State private var lyricFrames: [Int: CGRect] = [:]
     @State private var lastuser = Date.distantPast        // last time the user dragged the lyrics; auto-scroll waits a few seconds after that
+    @State private var manualBrowsing = false
+    @State private var needsRefocus = false
     @State private var artimage: UIImage?
+    @State private var backdropVideo: URL?
     @State private var sharinglyrics = false
     private let ticker = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        Group {
-            if let t = engine.current { content(t) } else { Text("nothing playing").foregroundColor(.white.opacity(0.65)) }
+        ZStack(alignment: .top) {
+            // Keep the screen full-height even when loading or no lyrics exist. Without this
+            // sizing layer the ZStack collapses around the empty-state message and drags the
+            // pinned track header into the middle of the display.
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Group {
+                if let t = engine.current { content(t) } else { Text("nothing playing").foregroundColor(.white.opacity(0.65)) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            if let track = engine.current { floatingHeader(track) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(LyricsBackdrop(image: artimage).ignoresSafeArea())
-        .lyricsbarclear()
-        .navigationTitle(engine.current.map { library.shown($0).title } ?? "lyrics")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Button("create lyric card") { sharinglyrics = true }
-                        .disabled(lyrics.doc?.lines.isEmpty != false)
-                    Button("import lyrics file") { importing = true }
-                    Button("paste lyrics") { pasting = true }
-                    Button("sync lyrics") { syncing = true }
-                    Menu("romanization") {
-                        romanitem("off", "off")
-                        romanitem("romanized words", "replace")
-                        romanitem("small text below", "below")
-                        romanitem("current line only", "current")
-                        romanitem("use app default", nil)
-                    }
-                    Button("search lrclib again") { if let t = engine.current { Task { await lyrics.load(t, refetch: true) } } }
-                    Button("remove my lyrics", role: .destructive) { if let t = engine.current { Task { await lyrics.removeuser(for: t) } } }
-                } label: { Image(systemName: "ellipsis.circle") }
-            }
-        }
-        .task(id: "\(engine.current?.id ?? "")|\(settings.lyricson)|\(settings.lyricsnet)") {
-            guard let t = engine.current else { artimage = nil; return }
-            active = -1; lastuser = .distantPast
+        .background(LyricsBackdrop(image: artimage, video: backdropVideo).ignoresSafeArea())
+        .navigationBarBackButtonHidden(true)
+        .navigationBarHidden(true)
+        .task(id: "\(engine.current?.id ?? "")|\(settings.lyricson)|\(settings.lyricsnet)|\(settings.lyricsbackground)") {
+            guard let t = engine.current else { artimage = nil; backdropVideo = nil; return }
+            active = []; focused = -1; lastuser = .distantPast; manualBrowsing = false; needsRefocus = false
+            lyricFrames = [:]
+            backdropVideo = nil
             async let loaded: Void = lyrics.load(t)
             if let u = library.shown(t).artworkurl { artimage = await ArtworkLoader.shared.image(u, maxpixel: 1200) }
             else { artimage = nil }
+            if settings.lyricsbackground != "cover", !UIAccessibility.isReduceMotionEnabled {
+                if settings.lyricsbackground == "canvas" {
+                    if settings.spotifycanvas, t.isspotify {
+                        if let cached = SpotifyCanvas.shared.cached(trackid: t.id)?.video { backdropVideo = cached }
+                        else { backdropVideo = await SpotifyCanvas.shared.cover(trackid: t.id)?.video }
+                    }
+                } else {
+                    backdropVideo = await AnimatedCovers.resolve(for: t, shown: library.shown(t), settings: settings, library: library)?.video
+                }
+            }
             await loaded
         }
         .copyPicker(isPresented: $importing, types: [.plainText, .data]) { urls in
@@ -323,6 +329,86 @@ struct LyricsView: View {
                 LyricCardComposer(track: library.shown(track), doc: doc, current: current(doc, engine.livepos()), artwork: artimage)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
+            guard engine.current != nil, lyrics.doc?.lines.isEmpty == false else { return }
+            sharinglyrics = true
+        }
+    }
+
+    private func floatingHeader(_ track: Track) -> some View {
+        VStack(spacing: 16) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .appFont(.system(size: 24, weight: .bold))
+                        .frame(width: 50, height: 50)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                Spacer()
+                Menu {
+                    Button("create lyric card") { sharinglyrics = true }
+                        .disabled(lyrics.doc?.lines.isEmpty != false)
+                    Button("import lyrics file") { importing = true }
+                    Button("paste lyrics") { pasting = true }
+                    Button("sync lyrics") { syncing = true }
+                    Menu("romanization") {
+                        romanitem("off", "off")
+                        romanitem("romanized words", "replace")
+                        romanitem("small text below", "below")
+                        romanitem("current line only", "current")
+                        romanitem("use app default", nil)
+                    }
+                    Button("search lrclib again") { Task { await lyrics.load(track, refetch: true) } }
+                    Button("remove my lyrics", role: .destructive) { Task { await lyrics.removeuser(for: track) } }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .appFont(.system(size: 23, weight: .bold))
+                        .frame(width: 50, height: 50)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+            }
+            .foregroundColor(.white)
+
+            HStack(spacing: 14) {
+                if let artimage {
+                    Image(uiImage: artimage).resizable().scaledToFill()
+                        .frame(width: 68, height: 68)
+                        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .shadow(color: .black.opacity(0.3), radius: 12, y: 7)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    AlbumLink(track: track) { Text(library.shown(track).title).appFont(.title2.weight(.bold)).foregroundColor(.white).lineLimit(1) }
+                    ArtistLink(track: track) { Text(library.shown(track).artist).appFont(.subheadline.weight(.semibold)).foregroundColor(.white.opacity(0.68)).lineLimit(1) }
+                    if let doc = lyrics.doc(for: track.id), !doc.source.isEmpty {
+                        attributionText(doc)
+                        .appFont(.caption2)
+                        .foregroundColor(.white.opacity(0.56))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity)
+        .zIndex(10)
+    }
+
+    private func attributionText(_ doc: LyricsDoc) -> Text {
+        var value = AttributedString(doc.source)
+        func append(_ prefix: String, _ credit: LyricsCredit?) {
+            guard let credit else { return }
+            value += AttributedString(prefix)
+            var linked = AttributedString(credit.name)
+            linked.link = URL(string: credit.url)
+            value += linked
+        }
+        append(" · ", doc.uploader)
+        append(" · synced by ", doc.maker)
+        return Text(value)
     }
 
     @ViewBuilder
@@ -335,39 +421,47 @@ struct LyricsView: View {
 
     private func current(_ doc: LyricsDoc, _ pos: Double) -> Int {
         guard doc.synced else { return -1 }
-        var idx = -1
-        for (i, l) in doc.lines.enumerated() where l.time <= pos { idx = i }
-        return idx
+        let singing = activeLines(doc, pos)
+        // Keep the stack anchored to the first overlapping voice. It advances only when that
+        // upper line ends, rather than jumping as soon as a second singer enters.
+        if let earliest = singing.min(by: { doc.lines[$0].time < doc.lines[$1].time }) { return earliest }
+        return doc.lines.lastIndex(where: { $0.time <= pos }) ?? -1
+    }
+
+    private func activeLines(_ doc: LyricsDoc, _ pos: Double) -> Set<Int> {
+        Set(doc.lines.indices.filter { doc.lines[$0].time <= pos && pos < doc.lines[$0].end })
     }
 
     @ViewBuilder
     private func content(_ t: Track) -> some View {
         if let doc = lyrics.doc(for: t.id) {
             let mode = lyrics.romanmode(for: t.id, library: library)
+            let topBlurEnabled = !doc.synced || doc.lines.first.map { first in
+                first.end >= 0 && engine.livepos() >= first.end
+            } ?? false
             GeometryReader { geometry in
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 22) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                AlbumLink(track: t) { Text(library.shown(t).title).font(.headline).foregroundColor(.white) }
-                                ArtistLink(track: t) { Text(library.shown(t).artist).font(.subheadline).foregroundColor(.white.opacity(0.62)) }
-                                if !doc.source.isEmpty {
-                                    HStack(spacing: 4) {
-                                        Text(doc.source)
-                                        if let credit = doc.uploader, let url = URL(string: credit.url) { Text("·"); Link(credit.name, destination: url) }
-                                        if let credit = doc.maker, let url = URL(string: credit.url) { Text("· synced by"); Link(credit.name, destination: url) }
-                                    }
-                                    .font(.caption2).foregroundColor(.white.opacity(0.45))
-                                }
-                                if !doc.synced { Text("these lyrics aren't timed. use sync lyrics in the … menu to time them.").font(.caption).foregroundColor(.white.opacity(0.55)).padding(.top, 2) }
-                            }
-                            .padding(.bottom, 18)
+                        VStack(alignment: .leading, spacing: 26) {
+                            if !doc.synced { Text("these lyrics aren't timed. use sync lyrics in the … menu to time them.").appFont(.caption).foregroundColor(.white.opacity(0.55)) }
                             LazyVStack(alignment: .leading, spacing: 22) {
                                 ForEach(Array(doc.lines.enumerated()), id: \.offset) { i, lyric in
-                                    LyricLineView(lyric: lyric, index: i, active: active, synced: doc.synced,
+                                    LyricLineView(lyric: lyric, index: i, synced: doc.synced,
                                                   size: min(max(CGFloat(settings.lyricssize) * 1.15, 16), 40),
                                                   words: settings.lyricswords, estimate: settings.lyricsfake,
-                                                  laser: settings.lyricsstyle == "laser", mode: mode)
+                                                  active: active, focused: focused,
+                                                  laser: settings.lyricsstyle == "laser", manualBrowsing: manualBrowsing, mode: mode)
+                                        .blur(radius: settings.lyricsstyle == "laser"
+                                              ? edgeBlur(for: lyricFrames[i], viewport: geometry.size.height,
+                                                         topEnabled: topBlurEnabled)
+                                              : 0)
+                                        .opacity(edgeOpacity(for: lyricFrames[i], viewport: geometry.size.height))
+                                        .background(GeometryReader { lineProxy in
+                                            Color.clear.preference(
+                                                key: LyricFramePreferenceKey.self,
+                                                value: [i: lineProxy.frame(in: .named("lyricsViewport"))]
+                                            )
+                                        })
                                         .id(i)
                                         .onTapGesture {
                                             if doc.synced, lyric.time >= 0 { lastuser = .distantPast; engine.seek(lyric.time) }
@@ -377,68 +471,113 @@ struct LyricsView: View {
                         }
                         .frame(width: max(1, geometry.size.width - 40), alignment: .leading)
                         .padding(.horizontal, 20)
-                        .padding(.top, 24)
+                        .padding(.top, 164)
                         .padding(.bottom, 170)
                     }
+                    .coordinateSpace(name: "lyricsViewport")
+                    .onPreferenceChange(LyricFramePreferenceKey.self) { lyricFrames = $0 }
                     // follow the song: the line being sung is kept near the upper third, unless the user is scrolling by hand
                     .onReceive(ticker) { _ in
                         guard doc.synced else { return }
-                        let now = current(doc, engine.livepos())
-                        guard now != active else { return }
-                        active = now
-                        if now >= 0, Date().timeIntervalSince(lastuser) > 3.5 {
-                            withAnimation(.easeInOut(duration: 0.5)) { proxy.scrollTo(now, anchor: UnitPoint(x: 0.5, y: 0.34)) }
+                        let position = engine.livepos()
+                        let nowActive = activeLines(doc, position)
+                        let nowFocused = current(doc, position)
+                        if nowActive != active { active = nowActive }
+                        let browsingExpired = manualBrowsing && Date().timeIntervalSince(lastuser) >= 5
+                        if browsingExpired { manualBrowsing = false }
+                        let focusChanged = nowFocused != focused
+                        if focusChanged { focused = nowFocused }
+                        guard focusChanged || (browsingExpired && needsRefocus) else { return }
+                        if nowFocused >= 0, !manualBrowsing {
+                            needsRefocus = false
+                            withAnimation(.easeInOut(duration: 0.5)) { proxy.scrollTo(nowFocused, anchor: UnitPoint(x: 0.5, y: 0.34)) }
                             // the romanized sub-line of the current line fades in and changes the height: land once more when it has settled
                             if mode == "current" {
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                                    guard active == now, Date().timeIntervalSince(lastuser) > 3.5 else { return }
-                                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(now, anchor: UnitPoint(x: 0.5, y: 0.34)) }
+                                    guard focused == nowFocused, !manualBrowsing else { return }
+                                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(nowFocused, anchor: UnitPoint(x: 0.5, y: 0.34)) }
                                 }
                             }
                         }
                     }
                     .onChange(of: mode) { _ in
-                        guard active >= 0 else { return }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { proxy.scrollTo(active, anchor: UnitPoint(x: 0.5, y: 0.34)) }
+                        guard focused >= 0 else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { proxy.scrollTo(focused, anchor: UnitPoint(x: 0.5, y: 0.34)) }
                     }
-                    .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in lastuser = Date() })
+                    .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in
+                        lastuser = Date()
+                        manualBrowsing = true
+                        needsRefocus = true
+                    })
                 }
             }
         } else if lyrics.loadingid == t.id {
             ProgressView("finding lyrics…").tint(.white).foregroundColor(.white.opacity(0.75))
         } else {
             VStack(spacing: 8) {
-                Image(systemName: "quote.bubble").font(.largeTitle)
-                Text(lyrics.status.isEmpty ? "no lyrics available" : lyrics.status).font(.headline)
-                Text("use the … menu to add synced lyrics.").font(.subheadline).opacity(0.6)
+                Image(systemName: "quote.bubble").appFont(.largeTitle)
+                Text(lyrics.status.isEmpty ? "no lyrics available" : lyrics.status).appFont(.headline)
+                Text("use the … menu to add synced lyrics.").appFont(.subheadline).opacity(0.6)
             }.padding()
             .foregroundColor(.white)
         }
     }
 
+    private func edgeBlur(for frame: CGRect?, viewport: CGFloat, topEnabled: Bool) -> CGFloat {
+        guard let frame else { return 0 }
+        // The fixed track header ends around 150 pt. Lyrics become increasingly out of
+        // focus as they travel underneath it, which makes the scroll feel spatial.
+        let topSoftEdge: CGFloat = 245
+        let topFullEdge: CGFloat = 105
+        let topProgress = topEnabled ? min(max((topSoftEdge - frame.midY) / (topSoftEdge - topFullEdge), 0), 1) : 0
+
+        // A lighter version at the bottom lets lines recede behind the floating tab bar.
+        let bottomSoftEdge = viewport - 195
+        let bottomFullEdge = viewport - 45
+        let bottomProgress = min(max((frame.midY - bottomSoftEdge) / (bottomFullEdge - bottomSoftEdge), 0), 1)
+        return max(topProgress * 8, bottomProgress * 4)
+    }
+
+    private func edgeOpacity(for frame: CGRect?, viewport: CGFloat) -> Double {
+        guard let frame else { return 1 }
+        let top = min(max((frame.midY - 70) / 105, 0), 1)
+        let bottom = min(max((viewport - 20 - frame.midY) / 115, 0), 1)
+        return Double(max(0.28, min(top, bottom)))
+    }
+
+}
+
+private struct LyricFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGRect] = [:]
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
 }
 
 // one lyric line. the active line lights up word by word: real word timing when the lyrics have it, otherwise an estimate
 // spread over the line (so line-synced lrc still gets a sweep). words are joined as Text so the line wraps like normal text.
-// laser: lines blur with their distance from the active line; a romanized sub-line and an ad-lib line follow the same blur and dimming.
+// Blur belongs to the viewport edges. Every line in the readable middle stays sharp,
+// including all simultaneously active voices.
 private struct LyricLineView: View {
     let lyric: LyricLine
     let index: Int
-    let active: Int
     let synced: Bool
     let size: CGFloat
     let words: Bool
     let estimate: Bool
+    let active: Set<Int>
+    let focused: Int
     let laser: Bool
+    let manualBrowsing: Bool
     let mode: String            // off, replace, below or current
     @EnvironmentObject var engine: PlaybackEngine
-
     private var isactive: Bool {
         guard synced else { return true }
-        let position = engine.livepos()
-        return lyric.time <= position && position < lyric.end
+        return active.contains(index)
     }
-    private var distance: Int { abs(index - active) }
+    private var emphasized: Bool {
+        isactive || (synced && focused < 0 && index == 0)
+    }
     private var romanline: String? { mode == "off" ? nil : lyric.roman }
     private var replaced: Bool { mode == "replace" && romanline != nil }
     // small romanized line under the original: every line for "below", the active line for "current" (unsynced lyrics have no active line)
@@ -457,33 +596,44 @@ private struct LyricLineView: View {
 
     private var timedwords: [LyricWord] {
         guard synced, words else { return [] }
+        let candidates: [LyricWord]
         if replaced {
-            if !lyric.words.isEmpty { return lyric.words.map { LyricWord(time: $0.time, end: $0.end, text: $0.roman ?? $0.text) } }
-            guard estimate else { return [] }
-            var l = lyric
-            l.text = lyric.roman ?? lyric.text
-            return LyricsParser.estimatedwords(l)
+            candidates = lyric.words.map { LyricWord(time: $0.time, end: $0.end, text: $0.roman ?? $0.text) }
+        } else {
+            candidates = lyric.words
         }
-        if !lyric.words.isEmpty { return lyric.words }
-        return estimate ? LyricsParser.estimatedwords(lyric) : []
+        if covers(candidates, text: shown) { return candidates }
+        guard estimate else { return [] }
+        var complete = lyric
+        complete.text = shown
+        return LyricsParser.estimatedwords(complete)
     }
 
     private var timedbackground: [LyricWord] {
-        guard synced, words, let background = lyric.backgroundwords, !background.isEmpty else { return [] }
-        return background
+        guard synced, words, let text = adlib, !text.isEmpty else { return [] }
+        let candidates = lyric.backgroundwords ?? []
+        if covers(candidates, text: text) { return candidates }
+        guard estimate else { return [] }
+        var backgroundLine = lyric
+        backgroundLine.text = text
+        backgroundLine.words = []
+        return LyricsParser.estimatedwords(backgroundLine)
+    }
+
+    private func covers(_ words: [LyricWord], text: String) -> Bool {
+        guard !words.isEmpty else { return false }
+        func compact(_ value: String) -> String {
+            value.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return compact(words.map(\.text).joined()) == compact(text)
     }
 
     // opacity of the whole line; classic keeps its old values
     private var dim: Double {
-        if !synced || isactive { return 1 }
-        if laser { return index < active ? 0.3 : 0.45 }
-        return index < active ? 0.3 : 0.5
-    }
-
-    // blur grows with the distance from the active line (1.5, 3, 4.5, capped at 6); far outside the visible area there is no blur at all
-    private var blurradius: CGFloat {
-        guard laser, synced, distance > 0, distance <= 14 else { return 0 }
-        return min(6, 1.5 * CGFloat(distance))
+        if !synced || emphasized { return 1 }
+        if laser { return index < focused ? 0.3 : 0.45 }
+        return index < focused ? 0.3 : 0.5
     }
 
     private var lineanimation: Animation? {
@@ -491,34 +641,53 @@ private struct LyricLineView: View {
         return .easeOut(duration: 0.25)
     }
 
+    private var inactiveBlur: CGFloat {
+        guard laser, synced, focused >= 0, !isactive, !manualBrowsing else { return 0 }
+        return 1.35
+    }
+
     var body: some View {
         let ws = timedwords
         let bws = timedbackground
         VStack(alignment: lyric.opposite ? .trailing : .leading, spacing: 4) {
+            if let singer = lyric.agentName, !singer.isEmpty {
+                Text(singer).appFont(.caption2).foregroundColor(.white.opacity(isactive ? 0.7 : 0.35))
+            }
             if synced, isactive, !ws.isEmpty {
-                TimelineView(.animation(minimumInterval: 1.0 / 24)) { _ in
-                    sweep(ws, engine.livepos()).font(.system(size: size, weight: .bold))
+                TimelineView(.animation(minimumInterval: 1.0 / 60)) { _ in
+                    if #available(iOS 16.0, *) {
+                        LaserSweepText(words: ws, position: engine.livepos(), size: size,
+                                       weight: .bold, trailing: lyric.opposite, glowEnabled: laser)
+                    } else {
+                        sweep(ws, engine.livepos()).appFont(.system(size: size, weight: .bold))
+                    }
                 }
             } else {
                 Text(shown)
-                    .font(.system(size: size, weight: isactive ? .bold : .semibold))
+                    .appFont(.system(size: size, weight: emphasized ? .bold : .semibold))
                     .foregroundColor(.white)
                     .opacity(dim)
             }
             if showsub, let r = romanline {
                 Text(r)
-                    .font(.system(size: size * 0.6, weight: .medium))
+                    .appFont(.system(size: size * 0.6, weight: .medium))
                     .foregroundColor(.white)
                     .opacity(dim * 0.6)
                     .transition(.opacity)
             }
             if let a = adlib {
                 if synced, isactive, !bws.isEmpty {
-                    TimelineView(.animation(minimumInterval: 1.0 / 24)) { _ in
-                        sweep(bws, engine.livepos()).font(.system(size: size * 0.65, weight: .semibold)).opacity(0.82)
+                    TimelineView(.animation(minimumInterval: 1.0 / 60)) { _ in
+                        if #available(iOS 16.0, *) {
+                            LaserSweepText(words: bws, position: engine.livepos(), size: size * 0.65,
+                                           weight: .semibold, trailing: lyric.opposite,
+                                           glowEnabled: laser).opacity(0.82)
+                        } else {
+                            sweep(bws, engine.livepos()).appFont(.system(size: size * 0.65, weight: .semibold)).opacity(0.82)
+                        }
                     }
                 } else {
-                    Text(a).font(.system(size: size * 0.65, weight: .semibold)).foregroundColor(.white).opacity(dim * 0.55)
+                    Text(a).appFont(.system(size: size * 0.65, weight: .semibold)).foregroundColor(.white).opacity(dim * 0.55)
                 }
             }
         }
@@ -526,9 +695,8 @@ private struct LyricLineView: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: lyric.opposite ? .trailing : .leading)
         .contentShape(Rectangle())
-        .scaleEffect(laser && synced && !isactive ? 0.96 : 1, anchor: lyric.opposite ? .trailing : .leading)
-        .blur(radius: blurradius)
-        .shadow(color: laser && isactive ? .white.opacity(0.65) : .clear, radius: laser && isactive ? 10 : 0)
+        .scaleEffect(laser && synced && !emphasized ? 0.965 : 1, anchor: lyric.opposite ? .trailing : .leading)
+        .blur(radius: inactiveBlur)
         .animation(lineanimation, value: active)
     }
 
@@ -553,6 +721,233 @@ private struct LyricLineView: View {
     }
 }
 
+@available(iOS 16.0, *)
+private struct LaserSweepText: View {
+    struct Glyph: Identifiable {
+        let id: Int
+        let character: Character
+        let brightness: Double
+        let scale: Double
+        let x: CGFloat
+        let y: CGFloat
+        let glowRadius: CGFloat
+        let glowAlpha: Double
+    }
+
+    let words: [LyricWord]
+    let position: Double
+    let size: CGFloat
+    let weight: Font.Weight
+    let trailing: Bool
+    let glowEnabled: Bool
+
+    private func clamp(_ value: Double, _ low: Double = 0, _ high: Double = 1) -> Double {
+        min(max(value, low), high)
+    }
+
+    private func smooth(_ value: Double) -> Double {
+        let x = clamp(value)
+        return x * x * (3 - 2 * x)
+    }
+
+    // Spicy's ScaleRange: .95 at rest, 1.0505 at 70%, then 1 at completion.
+    private func wordScale(_ progress: Double) -> Double {
+        let p = clamp(progress)
+        if p <= 0.7 { return 0.95 + (1.0505 - 0.95) * smooth(p / 0.7) }
+        return 1.0505 + (1 - 1.0505) * smooth((p - 0.7) / 0.3)
+    }
+
+    // Spicy's GlowRange: quick entrance, a held crest, then a soft release.
+    private func wordGlow(_ progress: Double) -> Double {
+        let p = clamp(progress)
+        if p < 0.15 { return smooth(p / 0.15) }
+        if p <= 0.6 { return 1 }
+        return 1 - smooth((p - 0.6) / 0.4)
+    }
+
+    private func emphasis(_ progress: Double) -> Double {
+        let p = clamp(progress)
+        guard p > 0, p < 1 else { return 0 }
+        return p < 0.5 ? smooth(p * 2) : 1 - smooth((p - 0.5) * 2)
+    }
+
+    private var glyphs: [Glyph] {
+        var result: [Glyph] = []
+        var id = 0
+        let reduced = UIAccessibility.isReduceMotionEnabled
+        for (wordIndex, word) in words.enumerated() {
+            let characters = Array(word.text)
+            let count = max(characters.count, 1)
+            let duration = max(word.end - word.time, 0.05)
+            let wordProgress = clamp((position - word.time) / duration)
+            let isSinging = word.time <= position && position < word.end
+            let isSung = position >= word.end
+            let baseScale = reduced ? 1 : (isSung ? 1 : wordScale(wordProgress))
+            let baseYOffset = reduced ? 0 : size * CGFloat(0.01 + (-0.033 - 0.01) * wordProgress)
+            let baseGlow = reduced || !isSinging ? 0 : wordGlow(wordProgress)
+
+            // Refreshed Simple Lyrics strengthens held words slowly, and the final
+            // word gets the larger, longer flame from the reference renderer.
+            let held = max(1, duration)
+            let growAmount: Double = {
+                let ratio = held / 2
+                let grown = ratio > 1 ? sqrt(ratio) : pow(ratio, 3)
+                let lastBoost = wordIndex == words.count - 1 ? 1.6 : 1
+                return min(1.2, grown * 0.6 * lastBoost)
+            }()
+            let blurStrength: Double = {
+                let ratio = held / 3
+                let grown = ratio > 1 ? sqrt(ratio) : pow(ratio, 3)
+                let lastBoost = wordIndex == words.count - 1 ? 1.5 : 1
+                return min(0.8, grown * 0.5 * lastBoost)
+            }()
+            let flameDuration = held * (wordIndex == words.count - 1 ? 1.2 : 1)
+
+            for (index, character) in characters.enumerated() {
+                // A fixed .55-em fade crosses the word as a single continuous edge.
+                // Half a glyph either side closely matches the CSS background sweep.
+                let glyphCentre = Double(index) + 0.5
+                let edge = wordProgress * Double(count + 1) - 0.5
+                let lit = isSung ? 1 : smooth((edge - glyphCentre + 0.55) / 1.1)
+                let brightness = glowEnabled ? 0.4 + 0.6 * lit : 0.36 + 0.64 * lit
+
+                let stagger = (flameDuration * 0.4 / Double(count)) * Double(index)
+                let flameAt = position - word.time - stagger
+                let swell = reduced || !isSinging ? 0 : emphasis(flameAt / flameDuration)
+                let fromCentre = Double(count) / 2 - Double(index)
+                let x = size * CGFloat(-swell * 0.03 * growAmount * fromCentre)
+                let lift = size * CGFloat(-swell * 0.025 * growAmount)
+                let scale = baseScale * (1 + swell * 0.1 * growAmount)
+                let emphasisGlow = swell * blurStrength
+                // A glyph blooms only while the sweep is entering it. The two-sided curve has
+                // no box or mask edge and falls away once the letter is fully active.
+                let entranceGlow = 4 * lit * (1 - lit)
+                let glowRadius = max(CGFloat(7 + 5 * entranceGlow), min(size * 0.45, size * CGFloat(0.45 * blurStrength)))
+                let glowAlpha = glowEnabled ? max(entranceGlow * 0.78,
+                                                  max(baseGlow * entranceGlow * 0.5,
+                                                      emphasisGlow * (0.28 + 0.42 * lit))) : 0
+
+                result.append(Glyph(id: id, character: character, brightness: brightness,
+                                    scale: scale, x: x, y: baseYOffset + lift,
+                                    glowRadius: glowRadius, glowAlpha: glowAlpha))
+                id += 1
+            }
+        }
+        return result
+    }
+
+    var body: some View {
+        WrappingGlyphLayout(trailing: trailing, glowOutset: size * 0.28) {
+            ForEach(glyphs) { glyph in
+                LaserGlyphView(glyph: glyph, size: size, weight: weight)
+            }
+        }
+        // Do not rasterize this into a drawingGroup: its finite texture bounds clip shadows.
+        // Cached wrapping and crest-only shadows keep this path light without imposing a
+        // hard visual boundary, so the glow can naturally overflow the lyric line.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(words.map(\.text).joined())
+    }
+}
+
+@available(iOS 16.0, *)
+private struct LaserGlyphView: View {
+    let glyph: LaserSweepText.Glyph
+    let size: CGFloat
+    let weight: Font.Weight
+
+    @ViewBuilder var body: some View {
+        let text = Text(String(glyph.character))
+            .appFont(.system(size: size, weight: weight))
+            .foregroundColor(.white.opacity(glyph.brightness))
+            .scaleEffect(glyph.scale)
+            .offset(x: glyph.x, y: glyph.y)
+        if glyph.glowAlpha > 0.01 {
+            text
+                .shadow(color: .white.opacity(glyph.glowAlpha), radius: glyph.glowRadius)
+                .shadow(color: .white.opacity(glyph.glowAlpha * 0.35), radius: glyph.glowRadius * 2.2)
+        } else {
+            text
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+private struct WrappingGlyphLayout: Layout {
+    let trailing: Bool
+    let glowOutset: CGFloat
+
+    struct Cache {
+        var sizes: [CGSize] = []
+        var width: CGFloat = -1
+        var rows: [Row] = []
+    }
+
+    struct Row {
+        var range: Range<Int>
+        var width: CGFloat
+        var height: CGFloat
+    }
+
+    func makeCache(subviews: Subviews) -> Cache {
+        Cache(sizes: subviews.map { $0.sizeThatFits(.unspecified) })
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        // Scale, opacity and shadow do not affect layout. Re-measure only when the glyph count
+        // or underlying font/text changes, not on every animation frame.
+        if cache.sizes.count != subviews.count {
+            cache.sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+            cache.width = -1
+        }
+    }
+
+    private func rows(_ subviews: Subviews, width: CGFloat, cache: inout Cache) -> [Row] {
+        if abs(cache.width - width) < 0.25, !cache.rows.isEmpty { return cache.rows }
+        guard !subviews.isEmpty else { return [] }
+        var result: [Row] = []
+        var start = 0
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for index in subviews.indices {
+            let size = cache.sizes[index]
+            if rowWidth > 0, rowWidth + size.width > width {
+                result.append(Row(range: start..<index, width: rowWidth, height: rowHeight))
+                start = index; rowWidth = 0; rowHeight = 0
+            }
+            rowWidth += size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        result.append(Row(range: start..<subviews.endIndex, width: rowWidth, height: rowHeight))
+        cache.width = width
+        cache.rows = result
+        return result
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let available = max(proposal.width ?? cache.sizes.reduce(0) { $0 + $1.width }, 1)
+        let layoutRows = rows(subviews, width: available, cache: &cache)
+        // The drawing group rasterizes to this exact rectangle. Reserve transparent room for
+        // the travelling shadow so it is never cropped to the font's typographic bounds.
+        return CGSize(width: available, height: layoutRows.reduce(0) { $0 + $1.height } + glowOutset * 2)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let layoutRows = rows(subviews, width: bounds.width, cache: &cache)
+        var y = bounds.minY + glowOutset
+        for row in layoutRows {
+            var x = trailing ? bounds.maxX - row.width : bounds.minX
+            for index in row.range {
+                let size = cache.sizes[index]
+                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                                      anchor: .topLeading, proposal: ProposedViewSize(size))
+                x += size.width
+            }
+            y += row.height
+        }
+    }
+}
+
 private extension View {
     // let the lyrics backdrop show through the status bar / navigation bar area instead of a black strip
     @ViewBuilder func lyricsbarclear() -> some View {
@@ -564,23 +959,34 @@ private extension View {
 
 private struct LyricsBackdrop: View {
     let image: UIImage?
+    let video: URL?
+    @EnvironmentObject var settings: Settings
+    @Environment(\.scenePhase) private var phase
     var body: some View {
         // GeometryReader + fixed frames: the blurred image must never size the parent (it used to make the screen wider than the display)
         GeometryReader { proxy in
             ZStack {
                 LinearGradient(colors: [Color(red: 0.24, green: 0.12, blue: 0.30), Color(red: 0.05, green: 0.08, blue: 0.14)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                if let image = image {
+                if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
-                        .blur(radius: 72)
-                        .scaleEffect(1.35)
-                        .opacity(0.72)
+                        .blur(radius: settings.lyricsbackdropblur)
+                        .scaleEffect(1.22)
+                        .saturation(settings.lyricsbackdropsaturation)
                 }
-                Color.black.opacity(0.38)
-                LinearGradient(colors: [.black.opacity(0.10), .black.opacity(0.48)], startPoint: .top, endPoint: .bottom)
+                if let video {
+                    LoopingVideoView(url: video, playing: phase == .active)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .blur(radius: settings.lyricsbackdropblur)
+                        .scaleEffect(1.16)
+                        .saturation(settings.lyricsbackdropsaturation)
+                        .transition(.opacity)
+                }
+                Color.black.opacity(settings.lyricsbackdropshade)
+                LinearGradient(colors: [.black.opacity(0.06), .black.opacity(0.38)], startPoint: .top, endPoint: .bottom)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
@@ -652,12 +1058,13 @@ private struct LyricCardComposer: View {
                       background: bg, color: UIColor(hexstring: settings.cardcolor),
                       blur: CGFloat(settings.cardblur), shade: CGFloat(settings.cardshade),
                       lyricsize: CGFloat(settings.cardsize), brand: settings.cardbrand,
+                      fontname: settings.customfontname,
                       cover: cover, artistphoto: artistphoto)
     }
 
     // changes whenever anything that affects the card changes, so the preview redraws
     private var previewkey: String {
-        "\(settings.cardbg)|\(settings.cardcolor)|\(settings.cardblur)|\(settings.cardshade)|\(settings.cardsize)|\(settings.cardbrand)|\(selected.sorted())|\(cover != nil)|\(artistphoto != nil)|\(romanchoice)|\(selected.contains { !romanof($0).isEmpty })"
+        "\(settings.cardbg)|\(settings.cardcolor)|\(settings.cardblur)|\(settings.cardshade)|\(settings.cardsize)|\(settings.cardbrand)|\(settings.customfontname)|\(selected.sorted())|\(cover != nil)|\(artistphoto != nil)|\(romanchoice)|\(selected.contains { !romanof($0).isEmpty })"
     }
 
     var body: some View {
@@ -700,7 +1107,7 @@ private struct LyricCardComposer: View {
                                 Image(systemName: selected.contains(index) ? "checkmark.circle.fill" : "circle")
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(lyric.text).foregroundColor(.primary)
-                                    if romanchoice != "off", let r = lyric.roman, !r.isEmpty { Text(r).font(.footnote).foregroundColor(.secondary) }
+                                    if romanchoice != "off", let r = lyric.roman, !r.isEmpty { Text(r).appFont(.footnote).foregroundColor(.secondary) }
                                 }
                                 .multilineTextAlignment(.leading)
                             }
@@ -772,7 +1179,7 @@ struct DevicePickerView: View {
             } else {
                 Section(header: Text("selected"), footer: Text("furmuse remote-controls the speaker you pick.")) {
                     KeyValue(key: "device", value: devices.selectedname)
-                    if devices.selectedmissing { Text("that speaker is offline. open spotify on it and refresh.").font(.footnote).foregroundColor(.orange) }
+                    if devices.selectedmissing { Text("that speaker is offline. open spotify on it and refresh.").appFont(.footnote).foregroundColor(.orange) }
                     if devices.selectedid != nil { Button("forget selection", role: .destructive) { devices.select(nil) } }
                 }
                 Section(header: Text("available"), footer: Text(devices.devices.isEmpty ? "no speakers found. open spotify on one, then refresh." : "press and hold to rename.")) {
@@ -783,7 +1190,7 @@ struct DevicePickerView: View {
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(devices.display(d)).foregroundColor(.primary)
-                                    Text("\(d.name) · \(d.type.lowercased())\(d.is_active ? " · active" : "")\(d.is_restricted == true ? " · restricted" : "")").font(.caption).foregroundColor(.secondary)
+                                    Text("\(d.name) · \(d.type.lowercased())\(d.is_active ? " · active" : "")\(d.is_restricted == true ? " · restricted" : "")").appFont(.caption).foregroundColor(.secondary)
                                 }
                                 Spacer()
                                 if d.id == devices.selectedid { Image(systemName: "checkmark") }
@@ -831,7 +1238,7 @@ struct RemoteView: View {
             Section(header: Text(devices.selectedname)) {
                 if let s = state, let t = s.item?.track {
                     Text(t.title); Text(t.artist).foregroundColor(.secondary)
-                    Text(s.is_playing ? "playing" : "paused").font(.caption).foregroundColor(.secondary)
+                    Text(s.is_playing ? "playing" : "paused").appFont(.caption).foregroundColor(.secondary)
                 } else {
                     Text(loaded ? "nothing is playing on that device" : "loading…").foregroundColor(.secondary)
                 }
@@ -841,7 +1248,7 @@ struct RemoteView: View {
                     Button { act { if state?.is_playing == true { await devices.pause() } else { await devices.resume() } } } label: { Image(systemName: state?.is_playing == true ? "pause.fill" : "play.fill") }
                     Button { act { await devices.next() } } label: { Image(systemName: "forward.fill") }
                     Spacer()
-                }.font(.title2).buttonStyle(.borderless)
+                }.appFont(.title2).buttonStyle(.borderless)
             }
             Section(footer: Text(state?.device?.volume_percent == nil || state?.device?.supports_volume == false ? "this speaker's volume can't be changed here." : "")) {
                 Slider(value: $volume, in: 0...100, step: 1) { editing in

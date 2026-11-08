@@ -38,7 +38,7 @@ struct YouTubeImportView: View {
                 Button("find tracks") { start() }.disabled(YouTubePlaylist.playlistid(from: link) == nil)
             }
             if !auth.connected {
-                Section { Text("spotify isn't connected, so every video is added as a youtube-only track.").foregroundColor(.secondary).font(.footnote) }
+                Section { Text("spotify isn't connected, so every video is added as a youtube-only track.").foregroundColor(.secondary).appFont(.footnote) }
             }
         }
     }
@@ -52,7 +52,7 @@ struct YouTubeImportView: View {
         VStack(spacing: 16) {
             Spacer()
             if let v = value { ProgressView(value: v).padding(.horizontal, 40) } else { ProgressView() }
-            Text(title).font(.headline)
+            Text(title).appFont(.headline)
             Text(detail).foregroundColor(.secondary)
             Button("stop", role: .destructive) { task?.cancel(); planner.cancel() }
             Spacer()
@@ -62,7 +62,7 @@ struct YouTubeImportView: View {
     private func failedview(_ why: String) -> some View {
         VStack(spacing: 14) {
             Spacer()
-            Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundColor(.orange)
+            Image(systemName: "exclamationmark.triangle").appFont(.largeTitle).foregroundColor(.orange)
             Text(why).multilineTextAlignment(.center).padding(.horizontal, 30)
             Button("try again") { start() }.buttonStyle(.bordered)
             Spacer()
@@ -77,7 +77,7 @@ struct YouTubeImportView: View {
             if let warning = planner.warning {
                 Section {
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote).foregroundColor(.orange)
+                        .appFont(.footnote).foregroundColor(.orange)
                 }
             }
             Section(footer: Text("\(planner.items.count) videos found. green = good match, orange = please check, grey = no spotify match. tap a row to change it. only ticked songs are added.")) {
@@ -88,7 +88,7 @@ struct YouTubeImportView: View {
                     if !onlyreview || it.confidence != .good {
                         HStack(spacing: 10) {
                             Button { it.include.toggle() } label: {
-                                Image(systemName: it.include ? "checkmark.circle.fill" : "circle").foregroundColor(it.include ? .accentColor : .secondary).font(.title3)
+                                Image(systemName: it.include ? "checkmark.circle.fill" : "circle").foregroundColor(it.include ? .accentColor : .secondary).appFont(.title3)
                             }.buttonStyle(.plain)
                             Button { editing = it.id } label: { row(it) }.buttonStyle(.plain)
                         }
@@ -98,7 +98,7 @@ struct YouTubeImportView: View {
         }
         .safeAreaInset(edge: .bottom) {
             Button { confirm() } label: {
-                Text("import \(planner.includedcount) tracks").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+                Text("import \(planner.includedcount) tracks").appFont(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
             }
             .buttonStyle(.borderedProminent).padding(.horizontal, 16).padding(.bottom, 8)
             .disabled(planner.includedcount == 0)
@@ -126,13 +126,13 @@ struct YouTubeImportView: View {
             AsyncImage(url: YouTubeSearch.thumbnail(it.source.id)) { img in img.resizable().aspectRatio(contentMode: .fill) } placeholder: { Color.gray.opacity(0.2) }
                 .frame(width: 72, height: 40).clipShape(RoundedRectangle(cornerRadius: 5))
             VStack(alignment: .leading, spacing: 2) {
-                Text(it.track.title).font(.subheadline.weight(.semibold)).foregroundColor(.primary).lineLimit(1)
-                Text(it.track.artist).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                Text("▶ \(it.source.title) · \(it.source.channel) · \(it.source.duration.map { fmttime($0) } ?? "?")").font(.caption2).foregroundColor(.secondary).lineLimit(1)
-                Text(([b.0] + it.notes).joined(separator: " · ")).font(.caption2.weight(.semibold)).foregroundColor(b.1).lineLimit(2)
+                Text(it.track.title).appFont(.subheadline.weight(.semibold)).foregroundColor(.primary).lineLimit(1)
+                Text(it.track.artist).appFont(.caption).foregroundColor(.secondary).lineLimit(1)
+                Text("▶ \(it.source.title) · \(it.source.channel) · \(it.source.duration.map { fmttime($0) } ?? "?")").appFont(.caption2).foregroundColor(.secondary).lineLimit(1)
+                Text(([b.0] + it.notes).joined(separator: " · ")).appFont(.caption2.weight(.semibold)).foregroundColor(b.1).lineLimit(2)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
+            Image(systemName: "chevron.right").appFont(.caption).foregroundColor(.secondary)
         }
         .contentShape(Rectangle())
     }
@@ -162,15 +162,15 @@ struct ImportItemEditor: View {
             List {
                 Section(header: Text("the playlist's video")) {
                     Text(item.video.title).lineLimit(3)
-                    Text("\(item.video.channel) · \(item.video.duration.map { fmttime($0) } ?? "?")").font(.caption).foregroundColor(.secondary)
+                    Text("\(item.video.channel) · \(item.video.duration.map { fmttime($0) } ?? "?")").appFont(.caption).foregroundColor(.secondary)
                 }
                 Section(header: Text(item.spotifymatched ? "spotify track" : "no spotify match yet")) {
                     HStack(spacing: 12) {
                         TrackArt(track: item.track, size: 50)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.track.title).font(.headline).lineLimit(2)
-                            Text(item.track.artist).font(.subheadline).foregroundColor(.secondary)
-                            Text(fmttime(item.track.duration)).font(.caption).foregroundColor(.secondary)
+                            Text(item.track.title).appFont(.headline).lineLimit(2)
+                            Text(item.track.artist).appFont(.subheadline).foregroundColor(.secondary)
+                            Text(fmttime(item.track.duration)).appFont(.caption).foregroundColor(.secondary)
                         }
                     }
                     HStack {
@@ -184,7 +184,7 @@ struct ImportItemEditor: View {
                                 TrackArt(track: t, size: 40)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(t.title).foregroundColor(.primary).lineLimit(1)
-                                    Text("\(t.artist) · \(fmttime(t.duration))").font(.caption).foregroundColor(.secondary).lineLimit(1)
+                                    Text("\(t.artist) · \(fmttime(t.duration))").appFont(.caption).foregroundColor(.secondary).lineLimit(1)
                                 }
                             }
                         }
@@ -192,7 +192,7 @@ struct ImportItemEditor: View {
                 }
                 Section(header: Text("youtube source"), footer: Text(item.verified.map { $0.level == .verified ? "verified against the spotify track" : "chosen by you; \($0.reasons.joined(separator: ", "))" } ?? "")) {
                     Text(item.source.title).lineLimit(3)
-                    Text("\(item.source.channel) · \(item.source.duration.map { fmttime($0) } ?? "?")").font(.caption).foregroundColor(.secondary)
+                    Text("\(item.source.channel) · \(item.source.duration.map { fmttime($0) } ?? "?")").appFont(.caption).foregroundColor(.secondary)
                     Button("choose a different youtube video") { choosingsource = true }
                 }
             }

@@ -132,7 +132,7 @@ struct LibraryView: View {
                         PlaylistCover(playlist: p, size: 52)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(p.name).lineLimit(1)
-                            Text("\(p.trackids.count) tracks\(p.spotifyid != nil ? " · from spotify" : (p.youtubeid != nil ? " · from youtube" : ""))").font(.caption).foregroundColor(.secondary)
+                            Text("\(p.trackids.count) tracks\(p.spotifyid != nil ? " · from spotify" : (p.youtubeid != nil ? " · from youtube" : ""))").appFont(.caption).foregroundColor(.secondary)
                         }
                     }
                 }
@@ -185,7 +185,7 @@ struct LibraryView: View {
                     AlbumArtworkView(group: g, size: 52, corner: 8)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(g.name).lineLimit(1)
-                        Text("\(g.artist) · \(g.tracks.count) \(g.tracks.count == 1 ? "song" : "songs")").font(.caption).foregroundColor(.secondary).lineLimit(1)
+                        Text("\(g.artist) · \(g.tracks.count) \(g.tracks.count == 1 ? "song" : "songs")").appFont(.caption).foregroundColor(.secondary).lineLimit(1)
                     }
                 }
             }

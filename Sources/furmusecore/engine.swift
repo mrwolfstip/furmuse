@@ -26,10 +26,12 @@ final class PlaybackEngine: ObservableObject {
     private var token = UUID()
     private var loadtask: Task<Void, Never>?
     private var retried = false
+    private var consecutiveFailures = 0
     private var tick: Timer?
     private var bag = Set<AnyCancellable>()
     private var lastspeed = 0.0
     private var lastpushedvolume = 1.0
+    private var lastQueueCommand = Date.distantPast
     var onstatechange: (() -> Void)?
 
     init(settings: Settings, library: LibraryStore, resolver: ResolverManager, auth: SpotifyAuth) {
@@ -70,6 +72,7 @@ final class PlaybackEngine: ObservableObject {
         leave(.skipped)
         queue = tracks
         index = i
+        lastQueueCommand = Date()
         load(tracks[i])
     }
 
@@ -83,6 +86,7 @@ final class PlaybackEngine: ObservableObject {
         guard queue.indices.contains(i) else { return }
         leave(.skipped)
         index = i
+        lastQueueCommand = Date()
         load(queue[i])
     }
 
@@ -90,6 +94,14 @@ final class PlaybackEngine: ObservableObject {
         let cur = current
         queue.remove(atOffsets: offsets)
         if let c = cur, let ni = queue.firstIndex(of: c) { index = ni } else { index = min(index, max(queue.count - 1, 0)) }
+    }
+
+    func insert(_ track: Track, at requestedIndex: Int) {
+        library.remember([track])
+        let insertion = min(max(0, requestedIndex), queue.count)
+        let cur = current
+        queue.insert(track, at: insertion)
+        if let cur, let currentIndex = queue.firstIndex(of: cur) { index = currentIndex }
     }
 
     func clearUpcoming() {
@@ -132,6 +144,7 @@ final class PlaybackEngine: ObservableObject {
     }
 
     func next() {
+        lastQueueCommand = Date()
         if driven { (source as? ConnectDrivenSource)?.connectnext(); return }
         if !hasnext, settings.repeatmode == "all", !queue.isEmpty { leave(.skipped); index = 0; load(queue[0]); return }
         guard hasnext else { if current != nil { leave(.skipped); finishqueue() }; return }
@@ -141,6 +154,7 @@ final class PlaybackEngine: ObservableObject {
     }
 
     func previous() {
+        lastQueueCommand = Date()
         if driven {
             if livepos() > 3 { seek(0) } else { (source as? ConnectDrivenSource)?.connectprevious() }
             return
@@ -257,6 +271,30 @@ final class PlaybackEngine: ObservableObject {
         toasts.show("\(library.shown(t).title): \(text)", route: viaspotify ? .source : .mapping)
         bus.send(.failed(t))
         onstatechange?()
+        advancePastFailure(t)
+    }
+
+    // A single unavailable/region-locked/broken item must not terminate a playlist. Loads are
+    // serialized on the main actor, so advancing here also avoids double-end races. The bounded
+    // counter prevents an all-bad repeating queue from looping forever.
+    private func advancePastFailure(_ failed: Track) {
+        guard current == failed, !driven else { return }
+        consecutiveFailures += 1
+        guard consecutiveFailures < max(queue.count, 1) else {
+            Log.e(.playback, "queue stopped after every remaining item failed")
+            toasts.show("no playable songs remain in the queue", route: .source)
+            return
+        }
+        if index + 1 < queue.count {
+            let nextIndex = index + 1
+            Log.w(.playback, "skipping failed queue item \(index + 1)/\(queue.count); trying \(nextIndex + 1)")
+            toasts.show("couldn't play this song — trying the next one", route: .source)
+            index = nextIndex
+            load(queue[nextIndex])
+        } else if settings.repeatmode == "all", !queue.isEmpty {
+            index = 0
+            load(queue[0])
+        }
     }
 
     // ---- source selection -------------------------------------------------------------------------------
@@ -376,6 +414,7 @@ final class PlaybackEngine: ObservableObject {
         src.play(from: swap?.position ?? 0)
         loading = false
         isplaying = true
+        consecutiveFailures = 0
         starttick()
         Log.i(.playback, "started \(t.id) via \(src.kind.rawValue), \(String(format: "%.2fx", settings.speed))")
         if let s = swap {
@@ -575,6 +614,9 @@ final class PlaybackEngine: ObservableObject {
     private func webstate(_ s: WebPlayerState?) {
         guard settings.backend == .webplayback, let s = s, !s.paused, let info = s.track, info.istrack else { return }
         guard !loading, !adopting else { return }
+        // Rapid skips produce delayed SDK states for songs Furmuse just left. They are acknowledgements
+        // of our queue commands, not a new external Connect session, and must never replace the queue.
+        guard Date().timeIntervalSince(lastQueueCommand) > 15 else { return }
         // furmuse started something on this device a moment ago: its own source handles those states
         guard Date().timeIntervalSince(WebPlaybackSession.shared.lastcommandedplay) > 10 else { return }
         if let src = source as? WebPlaybackSource {
@@ -797,7 +839,15 @@ final class PlaybackEngine: ObservableObject {
     private func drivenretarget(_ old: Track, _ new: Track, _ natural: Bool) {
         bus.send(natural ? .ended(old, old.duration) : .skipped(old, position))
         library.remember([new])
-        queue = [new]; index = 0
+        // A Connect-managed source also reports retargets while Furmuse is rapidly moving through
+        // its own queue. Preserve that queue and follow the matching item instead of collapsing it.
+        if !driven, let queuedIndex = queue.firstIndex(where: { $0.id == new.id }) {
+            queue[queuedIndex] = new
+            index = queuedIndex
+        } else {
+            queue = [new]
+            index = 0
+        }
         current = new; position = 0; duration = new.duration
         Log.i(.playback, "spotify connect moved to \(new.id)")
         library.addtolibrary(new, via: "played", played: true)

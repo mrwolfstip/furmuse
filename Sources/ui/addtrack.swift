@@ -72,7 +72,7 @@ struct AddTrackView: View {
                             HStack {
                                 Text(url.lastPathComponent).lineLimit(1)
                                 Spacer()
-                                Text(importstates[url.absoluteString] ?? "waiting").font(.caption).foregroundColor(.secondary)
+                                Text(importstates[url.absoluteString] ?? "waiting").appFont(.caption).foregroundColor(.secondary)
                                 if importstates[url.absoluteString] == "copying" { ProgressView().controlSize(.small) }
                             }
                         }

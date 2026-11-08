@@ -100,10 +100,10 @@ struct CoverHeader: View {
             .overlay(alignment: .bottom) {
                 VStack(spacing: 4) {
                     Text(title)
-                        .font(.system(size: 32, weight: .bold))
+                        .appFont(.system(size: 32, weight: .bold))
                         .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
                     if !subtitle.isEmpty {
-                        Text(subtitle).font(.subheadline.weight(.medium)).foregroundColor(.secondary).lineLimit(1)
+                        Text(subtitle).appFont(.subheadline.weight(.medium)).foregroundColor(.secondary).lineLimit(1)
                     }
                 }
                 // a soft halo in the page colour keeps the title readable over whatever part of the picture is still showing

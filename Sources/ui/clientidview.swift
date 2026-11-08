@@ -26,7 +26,7 @@ struct ClientIDSection: View {
                 .autocapitalization(.none).disableAutocorrection(true)
             Button(checking ? "checking…" : "save") { save() }
                 .disabled(checking || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if let m = message { Text(m).font(.footnote).foregroundColor(good ? .green : .orange) }
+            if let m = message { Text(m).appFont(.footnote).foregroundColor(good ? .green : .orange) }
         }
     }
 

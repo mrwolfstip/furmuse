@@ -129,7 +129,7 @@ struct LyricPasteSheet: View {
             VStack(alignment: .leading, spacing: 8) {
                 TextEditor(text: $pasted).padding(8)
                 Text("plain words are saved as unsynced lyrics. lrc or ttml text keeps its timing.")
-                    .font(.footnote).foregroundColor(.secondary).padding(.horizontal)
+                    .appFont(.footnote).foregroundColor(.secondary).padding(.horizontal)
                 Button("save") {
                     let text = LyricsText.normalized(pasted)
                     Task { @MainActor in
@@ -164,21 +164,21 @@ private struct SyncTransport: View {
     var body: some View {
         VStack(spacing: 10) {
             VStack(spacing: 2) {
-                Text(LyricsText.clock(pos)).font(.system(size: 36, weight: .semibold, design: .monospaced))
-                if engine.duration > 0 { Text("of \(fmttime(engine.duration))").font(.caption).foregroundColor(.secondary) }
+                Text(LyricsText.clock(pos)).appFont(.system(size: 36, weight: .semibold, design: .monospaced))
+                if engine.duration > 0 { Text("of \(fmttime(engine.duration))").appFont(.caption).foregroundColor(.secondary) }
             }
             .frame(maxWidth: .infinity)
             HStack(spacing: 40) {
                 Spacer()
                 Button { engine.seek(engine.livepos() - 5) } label: { Image(systemName: "gobackward.5") }
                     .accessibilityLabel("back 5 seconds")
-                Button { engine.toggle() } label: { Image(systemName: engine.isplaying ? "pause.fill" : "play.fill").font(.system(size: 30)) }
+                Button { engine.toggle() } label: { Image(systemName: engine.isplaying ? "pause.fill" : "play.fill").appFont(.system(size: 30)) }
                     .accessibilityLabel(engine.isplaying ? "pause" : "play")
                 Button { engine.seek(engine.livepos() + 5) } label: { Image(systemName: "goforward.5") }
                     .accessibilityLabel("forward 5 seconds")
                 Spacer()
             }
-            .font(.title)
+            .appFont(.title)
             .buttonStyle(.borderless)
         }
         .padding(.vertical, 4)
@@ -361,7 +361,7 @@ struct LyricSyncEditor: View {
                     if rows[i].isEmpty {
                         Color.clear.frame(height: 8)
                     } else if i == start {
-                        (mode == "word" ? wordtext(i) : Text(rows[i])).font(.title3.weight(.semibold))
+                        (mode == "word" ? wordtext(i) : Text(rows[i])).appFont(.title3.weight(.semibold))
                     } else {
                         Text(rows[i]).foregroundColor(.secondary)
                     }
@@ -400,7 +400,7 @@ struct LyricSyncEditor: View {
                     HStack {
                         Text(units[i].text).lineLimit(1)
                         Spacer()
-                        Text(LyricsText.clock(stamps[i])).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                        Text(LyricsText.clock(stamps[i])).appFont(.caption.monospacedDigit()).foregroundColor(.secondary)
                     }
                 }
                 .foregroundColor(.primary)
@@ -413,10 +413,10 @@ struct LyricSyncEditor: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(rows[li]).lineLimit(1)
                             Text("\(min(stamps.count, range.upperBound) - range.lowerBound) of \(range.count) words")
-                                .font(.caption).foregroundColor(.secondary)
+                                .appFont(.caption).foregroundColor(.secondary)
                         }
                         Spacer()
-                        Text(LyricsText.clock(stamps[range.lowerBound])).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                        Text(LyricsText.clock(stamps[range.lowerBound])).appFont(.caption.monospacedDigit()).foregroundColor(.secondary)
                     }
                 }
                 .foregroundColor(.primary)
@@ -434,9 +434,9 @@ struct LyricSyncEditor: View {
     // stamps on touch down rather than on release, so the time is the moment the finger lands
     private var stampbutton: some View {
         VStack(spacing: 2) {
-            Text(done ? "all stamped" : "stamp").font(.title2.weight(.bold))
+            Text(done ? "all stamped" : "stamp").appFont(.title2.weight(.bold))
             if stamps.count < units.count {
-                Text(units[stamps.count].text.trimmingCharacters(in: .whitespaces)).font(.footnote).lineLimit(1).opacity(0.85)
+                Text(units[stamps.count].text.trimmingCharacters(in: .whitespaces)).appFont(.footnote).lineLimit(1).opacity(0.85)
             }
         }
         .frame(maxWidth: .infinity).padding(.vertical, 20)

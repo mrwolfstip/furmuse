@@ -74,7 +74,7 @@ struct TrackAlbumPage: View {
                     if loading { Text("loading the album…").foregroundColor(.secondary) }
                     else if failed && fromspotify.isEmpty {
                         Text(local.isEmpty ? "couldn't load this album from spotify." : "couldn't reach spotify, so only the songs of this album that are in your library are shown.")
-                            .font(.footnote).foregroundColor(.secondary)
+                            .appFont(.footnote).foregroundColor(.secondary)
                     }
                 }.listRowBackground(Color.clear)
             }

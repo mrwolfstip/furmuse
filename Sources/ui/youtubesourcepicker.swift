@@ -72,9 +72,9 @@ struct YouTubeSourcePicker: View {
                     HStack(spacing: 12) {
                         TrackArt(track: track, size: 56)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(track.title).font(.headline).lineLimit(2)
-                            Text(track.artist).font(.subheadline).foregroundColor(.secondary).lineLimit(1)
-                            Text("\(track.album.isEmpty ? "" : track.album + " · ")\(fmttime(track.duration))").font(.caption).foregroundColor(.secondary).lineLimit(1)
+                            Text(track.title).appFont(.headline).lineLimit(2)
+                            Text(track.artist).appFont(.subheadline).foregroundColor(.secondary).lineLimit(1)
+                            Text("\(track.album.isEmpty ? "" : track.album + " · ")\(fmttime(track.duration))").appFont(.caption).foregroundColor(.secondary).lineLimit(1)
                         }
                     }
                 }
@@ -98,9 +98,9 @@ struct YouTubeSourcePicker: View {
                                 AsyncImage(url: YouTubeSearch.thumbnail(c.id)) { img in img.resizable().aspectRatio(contentMode: .fill) } placeholder: { Color.gray.opacity(0.2) }
                                     .frame(width: 96, height: 54).clipShape(RoundedRectangle(cornerRadius: 6))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(c.title).foregroundColor(.primary).lineLimit(2).font(.subheadline)
-                                    Text("\(c.channel.isEmpty ? "unknown channel" : c.channel) · \(dur(c.duration))").font(.caption).foregroundColor(.secondary).lineLimit(1)
-                                    Text(q.good ? "good match" : q.text).font(.caption2.weight(.semibold)).foregroundColor(q.good ? .green : .orange)
+                                    Text(c.title).foregroundColor(.primary).lineLimit(2).appFont(.subheadline)
+                                    Text("\(c.channel.isEmpty ? "unknown channel" : c.channel) · \(dur(c.duration))").appFont(.caption).foregroundColor(.secondary).lineLimit(1)
+                                    Text(q.good ? "good match" : q.text).appFont(.caption2.weight(.semibold)).foregroundColor(q.good ? .green : .orange)
                                 }
                                 Spacer(minLength: 0)
                                 Image(systemName: selected?.id == c.id ? "checkmark.circle.fill" : "circle").foregroundColor(selected?.id == c.id ? .accentColor : .secondary)

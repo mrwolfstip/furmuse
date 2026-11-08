@@ -79,7 +79,7 @@ struct ArtworkCropView: View {
                     .pickerStyle(.segmented)
                     .onChange(of: aspect) { _ in zoom = 1; offset = .zero }
                     Text("drag to move, pinch to zoom. cut away any black bars or borders: only what is inside the frame is kept.")
-                        .font(.footnote).foregroundColor(.secondary).multilineTextAlignment(.center)
+                        .appFont(.footnote).foregroundColor(.secondary).multilineTextAlignment(.center)
                 }
                 .padding(16)
             }

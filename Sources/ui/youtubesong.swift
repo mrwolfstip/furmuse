@@ -82,12 +82,12 @@ struct YouTubeSongView: View {
                                     TrackArt(track: it.track, size: 44)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(it.track.title).lineLimit(2)
-                                        Text(it.track.artist).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                                        Text(it.track.artist).appFont(.caption).foregroundColor(.secondary).lineLimit(1)
                                     }
                                 }
                                 Button("change match") { editing = true }
                             } else if item != nil {
-                                Text("no spotify match found. it will be added as a youtube-only track.").font(.footnote).foregroundColor(.secondary)
+                                Text("no spotify match found. it will be added as a youtube-only track.").appFont(.footnote).foregroundColor(.secondary)
                                 Button("search spotify") { editing = true }
                             }
                         }
@@ -118,8 +118,8 @@ struct YouTubeSongView: View {
             AsyncImage(url: YouTubeSearch.thumbnail(c.id)) { img in img.resizable().aspectRatio(contentMode: .fill) } placeholder: { Color.gray.opacity(0.2) }
                 .frame(width: 72, height: 40).clipShape(RoundedRectangle(cornerRadius: 5))
             VStack(alignment: .leading, spacing: 2) {
-                Text(c.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                Text("\(c.channel) · \(c.duration.map { fmttime($0) } ?? "?")").font(.caption).foregroundColor(.secondary).lineLimit(1)
+                Text(c.title).appFont(.subheadline.weight(.semibold)).lineLimit(2)
+                Text("\(c.channel) · \(c.duration.map { fmttime($0) } ?? "?")").appFont(.caption).foregroundColor(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -130,8 +130,8 @@ struct YouTubeSongView: View {
     private func doneview(_ t: Track) -> some View {
         VStack(spacing: 16) {
             Spacer()
-            Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
-            Text(t.title).font(.headline).multilineTextAlignment(.center).padding(.horizontal, 30)
+            Image(systemName: "checkmark.circle.fill").appFont(.system(size: 44)).foregroundColor(.green)
+            Text(t.title).appFont(.headline).multilineTextAlignment(.center).padding(.horizontal, 30)
             Text("added to your library").foregroundColor(.secondary)
             AddToPlaylistMenu(track: t) {
                 SwiftUI.Label("add to a playlist", systemImage: "text.badge.plus")
