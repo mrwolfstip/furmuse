@@ -29,7 +29,7 @@ it includes:
 <p align="center">
   <img src="docs/screenshots/now-playing.png" width="220" alt="furmuse now playing">
   &nbsp;
-  <img src="docs/screenshots/lyrics.png" width="220" alt="furmuse lyrics">
+  <img src="docs/screenshots/lyrics.gif" width="220" alt="furmuse lyrics">
   <img src="docs/screenshots/kissntell.gif" width="220" alt="furmuse lock screen">
 </p>
 
@@ -44,8 +44,6 @@ it includes:
 ---
 
 ## install — easiest option
-
-## this option is not available yet. build it yourself instead.
 
 **use the release unless you specifically want to edit or build the app yourself.** it is the shortest and easiest option.
 
